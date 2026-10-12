@@ -150,7 +150,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
   <nav class="nav">
     <a data-page="overview" class="on">运营总览</a>
     <a data-page="devices">设备监控</a>
-    <a data-page="orders">充电记录</a>
+    <a data-page="orders">交易记录</a>
     <a data-page="faults">故障管理</a>
     <a data-page="stations">充电站管理</a>
     <a data-page="logs">报文日志</a>
@@ -165,7 +165,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
   <aside class="side">
     <a data-page="overview" class="on">📊 运营总览</a>
     <a data-page="devices">🔌 设备监控</a>
-    <a data-page="orders">📋 充电记录</a>
+    <a data-page="orders">📋 交易记录</a>
     <a data-page="faults">🛠 故障管理</a>
     <a data-page="stations">🏢 充电站管理</a>
     <a data-page="logs">📜 报文日志</a>
@@ -247,28 +247,13 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
     <!-- ========== 交易记录 ========== -->
     <section class="page" id="page-orders">
       <div class="panel">
-        <h2>📋 全部充电记录</h2>
-        <p style="color:var(--dim);font-size:13px">客户订单与桩交易合并显示，同一流水不重复计数。无关联账号的刷卡、后台启机等交易显示为“未关联用户”。</p>
-        <form id="recordFilters" style="display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin:16px 0">
-          <label>桩编号<input name="pile_no" placeholder="桩号，支持部分匹配" maxlength="128"></label>
-          <label>枪号<input name="gun_no" type="number" min="1" max="99" placeholder="全部"></label>
-          <label>客户账号<input name="username" placeholder="账号，支持部分匹配" maxlength="128"></label>
-          <label>流水号<input name="serial_no" placeholder="流水号，支持部分匹配" maxlength="128"></label>
-          <label>状态<select name="status"><option value="">全部</option><option value="starting">正在启动</option><option value="charging">充电中</option><option value="stopping">正在停止</option><option value="unknown">结果待确认</option><option value="ending">等待账单</option><option value="finished">已结束</option><option value="failed">启动失败</option></select></label>
-          <label>来源<select name="source"><option value="">全部</option><option value="customer">客户订单</option><option value="device">未关联客户的桩交易</option></select></label>
-          <label>开始日期<input name="date_from" type="date"></label>
-          <label>结束日期<input name="date_to" type="date"></label>
-          <button class="primary" type="submit">查询</button><button type="button" id="recordReset">重置</button><button type="button" id="recordRefresh">刷新</button>
-        </form>
-        <div id="recordSummary" style="margin:12px 0;color:var(--dim)">正在加载…</div>
-        <div id="recordError" role="status" style="color:var(--red)"></div>
+        <h2>📋 充电交易记录（0x3B 账单）</h2>
         <div style="overflow-x:auto">
         <table id="txTable"><thead><tr>
-          <th>客户账号</th><th>状态</th><th>流水号</th><th>桩编号</th><th>枪</th><th>开始/创建时间</th><th>结束时间</th>
-          <th>电量(kWh)</th><th>计损电量(kWh)</th><th>金额(元)</th><th>VIN</th><th>启动方式</th><th>停止原因</th><th>来源</th><th>备注</th>
-        </tr></thead><tbody><tr><td colspan="15" class="empty">暂无记录</td></tr></tbody></table>
+          <th>交易流水号</th><th>桩编号</th><th>枪</th><th>开始时间</th><th>结束时间</th>
+          <th>总电量(kWh)</th><th>计损电量(kWh)</th><th>总金额(元)</th><th>VIN</th><th>启动方式</th><th>停止原因</th><th>物理卡号</th>
+        </tr></thead><tbody><tr><td colspan="12" class="empty">暂无交易记录</td></tr></tbody></table>
         </div>
-        <div style="display:flex;gap:12px;align-items:center;margin-top:16px"><button id="recordPrev">上一页</button><span id="recordPage">第1页</span><button id="recordNext">下一页</button><label>每页<select id="recordSize"><option value="20">20</option><option value="50" selected>50</option><option value="100">100</option></select></label></div>
       </div>
     </section>
 
@@ -442,7 +427,6 @@ document.querySelectorAll("[data-page]").forEach(a=>{
   a.onclick=()=>{
     document.querySelectorAll("[data-page]").forEach(x=>x.classList.toggle("on",x===a));
     document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on",p.id==="page-"+a.dataset.page));
-    if(a.dataset.page==="orders")initTx();
   };
 });
 
@@ -575,36 +559,35 @@ function updateStats(){
 
 /* ---------- 交易记录 ---------- */
 let txCount=0, txAmount=0;
-let recordPage=1,recordPages=1,recordFilters={},recordRequest=0,recordTimer;
-const ORDER_STATUS={starting:'正在启动',charging:'充电中',stopping:'正在停止',unknown:'结果待确认',ending:'等待账单',finished:'已结束',failed:'启动失败'};
-function recordRow(d){
- const tx=d.transaction||{},flagMap={1:'APP',2:'刷卡',4:'离线卡',5:'VIN'};
- const amount=d.amount==null?'—':Number(d.amount).toFixed(4)+(d.amount_final?'':'（实时）');
- const values=[d.username||(d.user_id?'已删除账号':'未关联用户'),ORDER_STATUS[d.status]||d.status,d.serial_no,d.pile_no,String(d.gun_no).padStart(2,'0'),d.start_time||d.record_time,d.end_time||'—',d.energy==null?'—':Number(d.energy).toFixed(4),tx.total_loss_energy==null?'—':(tx.total_loss_energy/10000).toFixed(4),amount,tx.vin||'—',flagMap[tx.trade_flag]||tx.trade_flag||'—',tx.stop_reason??'—',d.source==='customer'?'客户订单':'桩交易',d.note||'—'];
- const row=document.createElement('tr');for(const value of values){const cell=document.createElement('td');cell.textContent=value??'—';row.appendChild(cell);}return row;
+function buildTxRow(d){
+  const flagMap={1:"APP",2:"刷卡",4:"离线卡",5:"VIN"};
+  const tr=document.createElement("tr");
+  tr.innerHTML=`<td>${d.serial_no||"--"}</td><td>${d.pile_no||"--"}</td><td>${d.gun_no||"--"}</td>
+    <td>${d.start_time||"--"}</td><td>${d.end_time||"--"}</td>
+    <td>${(d.total_energy/10000).toFixed(2)}</td><td>${(d.total_loss_energy/10000).toFixed(2)}</td>
+    <td>${(d.total_amount/10000).toFixed(2)}</td><td>${d.vin||"--"}</td>
+    <td>${flagMap[d.trade_flag]||d.trade_flag||"--"}</td><td>${d.stop_reason||"--"}</td>
+    <td>${d.phys_card_no||"--"}</td>`;
+  return tr;
 }
 async function initTx(){
- if(!TOKEN)return;const request=++recordRequest;
- const query=new URLSearchParams({...recordFilters,page:String(recordPage),page_size:$('#recordSize').value});
- try{
- const response=await fetch('/api/charging-records?'+query,{headers:{Authorization:'Bearer '+TOKEN}});
- const data=await response.json();if(request!==recordRequest)return;
- if(!response.ok)throw new Error(data.error||'记录读取失败');
- recordPage=data.page;recordPages=data.pages;const tb=$('#txTable tbody');tb.replaceChildren();
- if(!data.records.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=15;cell.className='empty';cell.textContent='没有符合条件的记录';row.appendChild(cell);tb.appendChild(row);}
- else for(const record of data.records)tb.appendChild(recordRow(record));
- $('#recordSummary').textContent=`符合条件 ${data.total} 条 · 最终账单电量 ${Number(data.summary.final_energy).toFixed(4)} kWh · 最终账单金额 ${Number(data.summary.final_amount).toFixed(4)} 元（不含进行中估算，未代表支付到账）`;
- $('#recordPage').textContent=`第 ${recordPage} / ${recordPages} 页`;$('#recordPrev').disabled=recordPage<=1;$('#recordNext').disabled=recordPage>=recordPages;$('#recordError').textContent='';
- }catch(error){if(request===recordRequest)$('#recordError').textContent='读取失败：'+error.message;}
+  try{
+    const r=await api("/api/transactions");
+    const list=r.transactions||[];
+    const tb=$("#txTable tbody");
+    tb.innerHTML = list.length ? "" : '<tr><td colspan="12" class="empty">暂无交易记录</td></tr>';
+    // 按交易时间倒序展示最新在前
+    list.sort((a,b)=>String(b.trade_time||"").localeCompare(String(a.trade_time||"")));
+    for(const d of list) tb.appendChild(buildTxRow(d));
+    logline("l-info",`[${new Date().toLocaleTimeString()}] 已同步历史交易记录 ${list.length} 条`);
+  }catch(e){}
 }
-function addTx(d){clearTimeout(recordTimer);recordTimer=setTimeout(initTx,500);refreshStats();}
-$('#recordFilters').onsubmit=e=>{e.preventDefault();recordFilters=Object.fromEntries(new FormData(e.target));recordPage=1;initTx();};
-$('#recordReset').onclick=()=>{$('#recordFilters').reset();recordFilters={};recordPage=1;initTx();};
-$('#recordRefresh').onclick=initTx;
-$('#recordPrev').onclick=()=>{if(recordPage>1){recordPage--;initTx();}};
-$('#recordNext').onclick=()=>{if(recordPage<recordPages){recordPage++;initTx();}};
-$('#recordSize').onchange=()=>{recordPage=1;initTx();};
-setInterval(()=>{if(TOKEN&&!document.hidden&&$('#page-orders').classList.contains('on'))initTx();},15000);
+function addTx(d){
+  const tb=$("#txTable tbody");
+  if(tb.querySelector("td[colspan]")) tb.innerHTML="";
+  tb.insertBefore(buildTxRow(d),tb.firstChild);
+  refreshStats();
+}
 
 /* ---------- API ---------- */
 async function api(path, body, method){
