@@ -2031,6 +2031,10 @@ class ChargingApp(CustomerAccounts):
             c.execute("UPDATE orders SET status='finished',note='设备交易已上报；未接支付扣款',transaction_json=?,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=?",
                       (json.dumps(d,ensure_ascii=False),time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))
 
+class ReusableYkcTCPServer(ThreadingTCPServer):
+    allow_reuse_address = True
+
+
 def main():
     global CUSTOMER_APP
     ap = argparse.ArgumentParser(description="云快充平台协议 V1.6 平台端服务")
@@ -2061,7 +2065,7 @@ def main():
         handlers=[logging.StreamHandler(),
                   logging.FileHandler("ykc_server.log", encoding="utf-8")])
 
-    server = ThreadingTCPServer((args.host, args.port), YkcHandler)
+    server = ReusableYkcTCPServer((args.host, args.port), YkcHandler)
     server.daemon_threads = True
     log.info("云快充平台服务启动: %s:%d (充电桩TCP)", args.host, args.port)
 
