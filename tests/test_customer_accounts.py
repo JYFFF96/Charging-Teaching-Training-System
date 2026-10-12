@@ -7,7 +7,7 @@ import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 
-spec=importlib.util.spec_from_file_location('customer',Path(__file__).resolve().parents[1]/'server'/'customer_web.py')
+spec=importlib.util.spec_from_file_location('customer',Path(__file__).resolve().parents[1]/'server'/'ykc_platform_server.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
 class Accounts(unittest.TestCase):
@@ -15,7 +15,7 @@ class Accounts(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.db=Path(self.tmp.name)/'users.sqlite3'
         self.page=Path(self.tmp.name)/'charge.html';self.page.write_text('customer test page')
-        self.app=m.App(self.db,self.page,True)
+        self.app=m.CustomerAccounts(self.db,self.page,True)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),m.handler_for(self.app))
         self.port=self.server.server_port
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
@@ -47,7 +47,7 @@ class Accounts(unittest.TestCase):
         status,_,cookie=self.request('/api/customer/login',{'username':'customer_1','password':'new-password-456'});self.assertEqual(status,200)
         self.assertEqual(self.request('/api/customer/logout',{},cookie)[0],200)
         self.assertEqual(self.request('/api/customer/me',cookie=cookie)[0],401)
-        reopened=m.App(self.db,self.page,True)
+        reopened=m.CustomerAccounts(self.db,self.page,True)
         with reopened.connect() as c:
             row=c.execute('SELECT * FROM users').fetchone()
             self.assertTrue(m.matches('new-password-456',row['password']))

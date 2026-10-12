@@ -1,21 +1,29 @@
-# 客户接口
+# 一体化客户API（8088）
 
-页面与接口由同一个8088服务提供，浏览器使用HttpOnly会话Cookie，POST携带 `Content-Type: application/json`、`X-Customer-Request: 1` 和浏览器自动设置的同源Origin。正式访问使用HTTPS；不支持跨域接口调用。
+客户服务由ykc_platform_server.py启动，共享实时设备会话。管理接口仍在8000，客户会话不能访问管理权限。页面及API同源，POST使用JSON、X-Customer-Request: 1及Origin；会话HttpOnly/SameSite Cookie。
 
-| 方法 | 路径 | 状态与内容 |
+| 方法 | 路径 | 用途 |
 |---|---|---|
-| GET | /api/customer/config | 已实现，返回HTTP测试模式和充电演示标志 |
-| GET | /api/customer/me | 已实现，返回当前用户；未登录401 |
-| POST | /api/customer/register | 已实现，username,password,security_question_id,security_answer；创建并登录 |
-| POST | /api/customer/login | 已实现，username,password；登录并设置Cookie |
-| POST | /api/customer/logout | 已实现，注销当前会话 |
-| POST | /api/customer/recovery/verify | 已实现，username,security_question_id,security_answer；返回reset_token |
-| POST | /api/customer/recovery/reset | 已实现，reset_token,new_password；重置并注销所有旧会话 |
+| GET | /api/customer/config | HTTP模式、设备模式、测试额度（元） |
+| GET | /api/customer/me | 当前客户 |
+| POST | /api/customer/register | username,password,security_question_id,security_answer |
+| POST | /api/customer/login | username,password |
+| POST | /api/customer/logout | 注销当前会话 |
+| POST | /api/customer/recovery/verify | username,security_question_id,security_answer，返回5分钟一次性reset_token |
+| POST | /api/customer/recovery/reset | reset_token,new_password，撤销所有旧会话 |
+| GET | /api/customer/device?pile_no=...&gun_no=... | 可用性/本人订单/实时数据/计费模型 |
+| POST | /api/customer/orders | pile_no,gun_no；确认并启动；同账号同枪进行中订单返回原订单，不重复发命令 |
+| GET | /api/customer/orders | 本人最近100笔订单 |
+| GET | /api/customer/orders/{id} | 本人订单及匹配的最新设备数据 |
+| POST | /api/customer/orders/{id}/stop | 停止本人订单，须最新充电数据与订单流水匹配 |
 
-账号4–32位字母数字下划线，大小写不敏感；密码8–128字符且区分大小写。问题ID为secret、character、memory。答案进行Unicode NFKC、两端去空格、大小写归一化；答案归一化后2–128字符。找回时由客户选择注册时的问题，后端不提供账号是否存在或该账号的问题查询。验证错误统一返回账号/问题/答案不匹配。
+availability: idle、mine、occupied、offline、fault、unknown。其他账号占用只返回占用提示，不返回用户、流水、金额或订单。
+订单状态: starting、charging、stopping、unknown、ending、finished、failed。starting/charging/stopping/unknown/ending均占用枪；只有明确启机失败或匹配交易上报释放。服务重启将starting/stopping改为unknown，不自动重新下发。实时充电报文须匹配流水、桩和枪才能更新本人订单；空闲报文不立即释放占用，等待最终交易记录。
 
-单来源IP最多60次账号请求/10分钟；登录、恢复验证按账号及IP最多5次/10分钟，注册最多10次。超限429。登录成功清除该账号登录计数。重置凭证5分钟、一次性；会话24小时，存数据库可跨重启恢复。密码与答案不返回、不记录日志。
+单位: 实时energy/amount及最终total_energy/total_amount按报文值除10000，charge_time分钟。计费模型尖峰平谷电费和服务费除100000（元/kWh）。测试启动额度来自后台参数，单位分，与用户账户余额/充值无关，不接受前端余额输入。
 
-## 尚未实现
+账号4–32位字母数字下划线，大小写不敏感；密码8–128字符。问题ID secret、character、memory。答案NFKC、去两端空白、大小写归一化，密码与答案独立加盐PBKDF2-SHA256。会话24小时，重置凭证5分钟且一次性。数据库包含原版账号表及新增orders表，保持旧账号与会话。
 
-真实设备及订单接口、支付、用户与充电流水归属。充电演示仅存在当前页面内存，刷新清空，不会触发设备。后续需要后台验证费用、余额、订单归属、设备状态及幂等，并处理设备启停超时结果未知。客户不得调用原版管理接口。
+错误码401未登录/验证失败、404订单不存在（含非本人订单）、409占用/设备状态不允许、429请求过多。订单操作每个账号最多30次/10分钟。启动最长等待80秒，停止20秒；客户端请求超时不代表命令失败，应重新查询订单，不能重复自动启动。
+
+支付尚未接入。客户接口不可用于直接授权扣款或余额校验。

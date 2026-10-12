@@ -549,19 +549,20 @@ class PileSession:
         self.serial_seq = 0
         self.connected_at = datetime.now().isoformat()
         self.pending_start = {}   # 0x34 流水号hex -> [event, result]，等待 0x33 回复
-        self.pending_stop = None  # [event, result]，等待 0x35 回复
+        self.gun_locks = {n: threading.RLock() for n in range(1, 100)}
+        self.customer_stops = {}
         self.last_seen = time.time()   # 最近收到任一帧的时间(看门狗判定离线用)
         self.watchdog_fired = False    # 看门狗已广播离线(避免重复)
         self.pending_ack = {}          # 应答帧hex -> [event, box] (0x55/0x57/0x51/0x91/0x13)
 
     # ---------- 底层收发 ----------
     def send_frame(self, ftype: int, body: bytes = b""):
-        frame = build_frame(self.tx_seq, ftype, body)
         with self.send_lock:
+            frame = build_frame(self.tx_seq, ftype, body)
             self.request.sendall(frame)
+            self.tx_seq = (self.tx_seq + 1) & 0xFFFF
         log.info(">> %s (%s) %s", FRAME_NAMES.get(ftype, hex(ftype)), hex(ftype),
                  frame.hex().upper())
-        self.tx_seq = (self.tx_seq + 1) & 0xFFFF
         try:
             WSHub.broadcast({"type": "frame", "dir": "down", "pile_no": self.pile_no,
                              "ftype": ftype, "name": FRAME_NAMES.get(ftype, hex(ftype)),
@@ -664,6 +665,8 @@ class PileSession:
         d = parse_body(0x13, body)
         self._check_pile_mismatch(d)
         STORE.save_realtime(self.pile_no, d.get("gun_no"), d)
+        if CUSTOMER_APP:
+            CUSTOMER_APP.realtime(d)
         self._ack("13", d)
         if d.get("status") == 1:
             raise_fault(self.pile_no, d.get("gun_no", "01"), "桩故障", "实时数据上报桩状态=故障")
@@ -716,10 +719,12 @@ class PileSession:
     # ----- 0x33 远程启机回复 / 0xA3 并充启机回复 -----
     def h_33(self, seq, body):
         d = self._log_only(0x33, body)
-        pend = self.pending_start.pop(str(d.get("serial_no", "")), None)
+        pend = self.pending_start.get(str(d.get("serial_no", "")), None) if d.get("pile_no") == self.pile_no else None
         if pend:
             pend[1].update(d)
             pend[0].set()
+        if CUSTOMER_APP and not d.get("_truncated"):
+            CUSTOMER_APP.start_reply(d)
         if d.get("start_result") == 1:
             log.info("  订单 %s 远程启动成功", d.get("serial_no"))
         else:
@@ -732,13 +737,16 @@ class PileSession:
     # ----- 0x35 远程停机回复 -----
     def h_35(self, seq, body):
         d = self._log_only(0x35, body)
-        if self.pending_stop:
-            self.pending_stop[1].update(d)
-            self.pending_stop[0].set()
+        pending = self.customer_stops.get((seq, str(d.get("gun_no", "")))) if d.get("pile_no") == self.pile_no else None
+        if pending:
+            pending[1].update(d)
+            pending[0].set()
 
     # ----- 0x3B 交易记录 -> 0x40 -----
     def h_3B(self, seq, body):
         d = parse_body(0x3B, body)
+        if CUSTOMER_APP:
+            CUSTOMER_APP.transaction(d)
         STORE.save_transaction(d)
         log.info("  交易记录: %s", json.dumps(d, ensure_ascii=False))
         serial_bcd = str_to_bcd(d.get("serial_no", "0"), 16)
@@ -801,9 +809,21 @@ class PileSession:
         self.send_frame(0xA4, body)
 
     def dl_remote_stop(self, gun_no):
-        # 0x36 运营平台远程停机
-        self.pending_stop = (threading.Event(), {})
-        self.send_frame(0x36, self.pile_no_bcd + str_to_bcd(str(gun_no), 1))
+        # Both management and customer commands correlate by sequence and gun.
+        event, box = threading.Event(), {}
+        with self.send_lock:
+            seq = self.tx_seq
+            self.tx_seq = (seq + 1) & 0xFFFF
+            key = (seq, "%02d" % gun_no)
+            self.customer_stops[key] = (event, box)
+            frame = build_frame(seq, 0x36, self.pile_no_bcd + str_to_bcd(str(gun_no), 1))
+            try:
+                self.request.sendall(frame)
+            except OSError:
+                self.customer_stops.pop(key, None)
+                raise
+        log.info(">> 远程停机(0x36) seq=%d gun=%d", seq, gun_no)
+        return key
 
     def dl_read_realtime(self, gun_no):
         # 0x12 读取实时监测数据(等待 0x13 应答)
@@ -1413,6 +1433,15 @@ def make_api_handler(token, credentials=None):
 
         def _cmd_start(self, sess, pl):
             gun = int(pl.get("gun_no", 1))
+            if gun not in sess.gun_locks:
+                return self._json({"error": "枪号无效"}, 400)
+            with sess.gun_locks[gun]:
+                if CUSTOMER_APP and CUSTOMER_APP.active(sess.pile_no, gun):
+                    return self._json({"error": "该枪存在客户订单"}, 409)
+                return self._cmd_start_locked(sess, pl)
+
+        def _cmd_start_locked(self, sess, pl):
+            gun = int(pl.get("gun_no", 1))
             logic = str(pl.get("logic_card_no") or CFG.logic_card_no)
             phys = re.sub(r"[^0-9A-Fa-f]", "", str(pl.get("phys_card_no", "0"))) or "0"
             balance = int(round(float(pl.get("balance", 1000)) * 100))   # 元 -> 分
@@ -1421,6 +1450,7 @@ def make_api_handler(token, credentials=None):
             ev, box = sess.pending_start.get(key, (None, None))
             if ev is not None and ev.wait(START_WAIT):
                 ok = box.get("start_result") == 1
+                sess.pending_start.pop(key, None)
                 return self._json({"ok": ok, "reply": box})
             sess.pending_start.pop(key, None)
             return self._json({"ok": False,
@@ -1428,16 +1458,22 @@ def make_api_handler(token, credentials=None):
 
         def _cmd_stop(self, sess, pl):
             gun = int(pl.get("gun_no", 1))
+            if gun not in sess.gun_locks:
+                return self._json({"error": "枪号无效"}, 400)
+            with sess.gun_locks[gun]:
+                return self._cmd_stop_locked(sess, pl)
+
+        def _cmd_stop_locked(self, sess, pl):
+            gun = int(pl.get("gun_no", 1))
             log.info("[WEB] 对桩[%s]枪%d下发远程停机(0x36)", sess.pile_no, gun)
-            sess.dl_remote_stop(gun)
-            ev, box = sess.pending_stop or (None, None)
-            if ev is not None and ev.wait(STOP_WAIT):
-                sess.pending_stop = None
-                ok = box.get("stop_result") == 1
-                return self._json({"ok": ok, "reply": box})
-            sess.pending_stop = None
-            return self._json({"ok": False,
-                               "error": "等待充电桩回复(0x35)超时 %ds" % STOP_WAIT}, 504)
+            key = sess.dl_remote_stop(gun)
+            ev, box = sess.customer_stops[key]
+            try:
+                if ev.wait(STOP_WAIT):
+                    return self._json({"ok": box.get("stop_result") == 1, "reply": box})
+                return self._json({"ok": False, "error": "等待停机回复超时"}, 504)
+            finally:
+                sess.customer_stops.pop(key, None)
 
         # 需要等待桩应答的命令: 命令 -> (应答帧hex, 超时秒)
         ACK_WAIT = {"read_realtime": ("13", 10), "sync_time": ("55", 10),
@@ -1557,10 +1593,10 @@ class WebApiServer(threading.Thread):
         super().__init__(daemon=True)
         self.host, self.port, self.token = host, port, token
         self.credentials = credentials
+        self.httpd = ThreadingHTTPServer((host, port), make_api_handler(token, credentials))
 
     def run(self):
-        handler = make_api_handler(self.token, self.credentials)
-        httpd = ThreadingHTTPServer((self.host, self.port), handler)
+        httpd = self.httpd
         log.info("Web/API/WS 服务已启动: http://%s:%d/  (WS: /ws)%s",
                  self.host, self.port, "  [Token鉴权已开启]" if self.token else "")
         httpd.serve_forever()
@@ -1618,11 +1654,389 @@ class YkcHandler(BaseRequestHandler):
             log.info("桩连接关闭: %s (pile=%s)", self.client_address, session.pile_no)
 
 
+CUSTOMER_APP = None
+
+#!/usr/bin/env python3
+"""Standalone customer accounts and page server; charging remains a frontend demo."""
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import sqlite3
+import time
+import unicodedata
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
+
+ITERATIONS = 600000
+QUESTIONS = ('secret', 'character', 'memory')
+
+def digest(value):
+    salt = secrets.token_hex(16)
+    hashed = hashlib.pbkdf2_hmac('sha256', value.encode(), bytes.fromhex(salt), ITERATIONS).hex()
+    return salt + ':' + hashed
+
+def matches(value, stored):
+    salt, expected = stored.split(':')
+    actual = hashlib.pbkdf2_hmac('sha256', value.encode(), bytes.fromhex(salt), ITERATIONS).hex()
+    return hmac.compare_digest(actual, expected)
+
+def answer_text(value):
+    return unicodedata.normalize('NFKC', value).strip().casefold()
+
+def token_hash(value):
+    return hashlib.sha256(value.encode()).hexdigest()
+
+class CustomerAccounts:
+    def __init__(self, db, page, insecure=False):
+        self.db, self.page, self.insecure = str(db), Path(page), insecure
+        Path(db).parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as c:
+            c.executescript('''
+            CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL, question TEXT NOT NULL, answer TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS resets(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, until REAL NOT NULL);
+            ''')
+        os.chmod(self.db, 0o600)
+        self.dummy = digest('dummy-account-timing-value')
+    def connect(self):
+        c = sqlite3.connect(self.db, timeout=15)
+        c.row_factory = sqlite3.Row
+        return c
+    def limit(self, keys, maximum=5):
+        now = time.time()
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute('DELETE FROM limits WHERE until < ?', (now,))
+            rows = [c.execute('SELECT count FROM limits WHERE key=?', (k,)).fetchone() for k in keys]
+            if any(r and r['count'] >= maximum for r in rows):
+                return False
+            for key in keys:
+                c.execute('INSERT INTO limits VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1', (key, now+600))
+        return True
+    def session(self, token):
+        with self.connect() as c:
+            return c.execute('SELECT u.id,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?', (token_hash(token),time.time())).fetchone()
+    def issue(self, user_id):
+        token = secrets.token_urlsafe(32)
+        with self.connect() as c:
+            c.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
+            c.execute('INSERT INTO sessions VALUES (?,?,?)', (token_hash(token),user_id,time.time()+86400))
+        return token
+
+class ApiError(Exception):
+    def __init__(self, status, message):
+        self.status, self.message = status, message
+
+def handler_for(app):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            # Never log request payloads, tokens, or URL query parameters.
+            print('%s %s' % (self.client_address[0], fmt % args), flush=True)
+        def log_request(self, code='-', size='-'):
+            self.log_message('%s %s %s', self.command, urlsplit(self.path).path, code)
+        def send(self, obj, status=200, cookie=None):
+            body=json.dumps(obj,ensure_ascii=False).encode()
+            self.send_response(status)
+            self.send_header('Content-Type','application/json; charset=utf-8')
+            self.send_header('Content-Length',str(len(body)))
+            self.send_header('Cache-Control','no-store')
+            self.send_header('X-Content-Type-Options','nosniff')
+            if cookie: self.send_header('Set-Cookie',cookie)
+            self.end_headers()
+            self.wfile.write(body)
+        def cookie(self, token='', expire=False):
+            return 'customer_session=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%s%s' % (token,0 if expire else 86400,'' if app.insecure else '; Secure')
+        def token(self):
+            try:
+                cookies=SimpleCookie(self.headers.get('Cookie',''))
+                return cookies['customer_session'].value if 'customer_session' in cookies else ''
+            except Exception: return ''
+        def do_GET(self):
+            path=urlsplit(self.path).path
+            if path in ('/','/charge.html','/index.html'):
+                try: body=app.page.read_bytes()
+                except OSError: return self.send({'error':'客户页面文件不存在'},503)
+                self.send_response(200)
+                self.send_header('Content-Type','text/html; charset=utf-8')
+                self.send_header('Content-Length',str(len(body)))
+                self.send_header('Cache-Control','no-store')
+                self.send_header('X-Content-Type-Options','nosniff')
+                self.send_header('Referrer-Policy','same-origin')
+                self.end_headers(); self.wfile.write(body); return
+            if path=='/api/customer/me':
+                u=app.session(self.token())
+                return self.send({'user':{'username':u['username']}},200) if u else self.send({'error':'请先登录'},401)
+            if path=='/api/customer/config':
+                return self.send({'insecure_test':app.insecure,'charging_demo':not hasattr(app,'device'),'test_balance_yuan':getattr(app,'balance_fen',0)/100})
+            if hasattr(app, 'customer_get') and path.startswith('/api/customer/'):
+                try:
+                    u=app.session(self.token())
+                    if not u: raise ApiError(401,'请先登录')
+                    return self.send(app.customer_get(path, self.path, u['id']))
+                except ApiError as e: return self.send({'error':e.message},e.status)
+                except Exception: return self.send({'error':'服务暂时不可用'},500)
+            self.send({'error':'接口不存在'},404)
+        def do_POST(self):
+            try:
+                # Require a same-origin browser JSON request. No CORS support.
+                origin=self.headers.get('Origin')
+                host=self.headers.get('Host')
+                if not origin or urlsplit(origin).netloc!=host or self.headers.get('X-Customer-Request')!='1':
+                    raise ApiError(403,'请求来源无效，请从客户页面操作')
+                if urlsplit(origin).scheme!='https' and not app.insecure:
+                    raise ApiError(403,'账号功能需要HTTPS；HTTP仅允许显式测试模式')
+                if self.headers.get('Content-Type','').split(';')[0]!='application/json':
+                    raise ApiError(415,'需要JSON请求')
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=8192: raise ApiError(400,'请求长度无效')
+                self.connection.settimeout(10)
+                payload=json.loads(self.rfile.read(length))
+                if not isinstance(payload,dict): raise ApiError(400,'请求格式错误')
+                path=urlsplit(self.path).path
+                if hasattr(app,'customer_post') and path.startswith('/api/customer/orders'):
+                    u=app.session(self.token())
+                    if not u: raise ApiError(401,'请先登录')
+                    if not app.limit(['order:user:'+str(u['id'])],30): raise ApiError(429,'操作过于频繁，请稍后重试')
+                    return self.send(app.customer_post(path,payload,u['id']))
+                if path=='/api/customer/logout':
+                    with app.connect() as c: c.execute('DELETE FROM sessions WHERE token=?',(token_hash(self.token()),))
+                    return self.send({'ok':True},cookie=self.cookie(expire=True))
+                if path not in ('/api/customer/register','/api/customer/login','/api/customer/recovery/verify','/api/customer/recovery/reset'):
+                    raise ApiError(404,'接口不存在')
+                ip=self.client_address[0]
+                if not app.limit(['ip:'+ip],60): raise ApiError(429,'请求过于频繁，请10分钟后重试')
+                if path.endswith('/reset'): return self.reset(payload)
+                username=payload.get('username','')
+                if not isinstance(username,str) or not re.fullmatch('[A-Za-z0-9_]{4,32}',username):
+                    raise ApiError(400,'账号必须为4–32位字母、数字或下划线')
+                username=username.lower()
+                action=path.rsplit('/',1)[-1]
+                if not app.limit([action+':account:'+username,action+':ip:'+ip],5 if action!='register' else 10):
+                    raise ApiError(429,'尝试次数过多，请10分钟后重试')
+                with app.connect() as c: u=c.execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
+                if action=='register':
+                    pwd=self.password(payload.get('password'))
+                    question,answer=self.answer(payload)
+                    with app.connect() as c:
+                        try:
+                            uid=c.execute('INSERT INTO users(username,password,question,answer) VALUES (?,?,?,?)',(username,digest(pwd),question,digest(answer))).lastrowid
+                        except sqlite3.IntegrityError: raise ApiError(409,'该账号无法注册，请换一个账号或登录')
+                    return self.send({'ok':True,'user':{'username':username}},201,cookie=self.cookie(app.issue(uid)))
+                if action=='login':
+                    pwd=self.password(payload.get('password'))
+                    good=matches(pwd,u['password'] if u else app.dummy)
+                    if not u or not good: raise ApiError(401,'账号或密码错误')
+                    with app.connect() as c: c.execute('DELETE FROM limits WHERE key=?',('login:account:'+username,))
+                    return self.send({'ok':True,'user':{'username':username}},cookie=self.cookie(app.issue(u['id'])))
+                question,answer=self.answer(payload)
+                good=matches(answer,u['answer'] if u else app.dummy)
+                if not u or not good or u['question']!=question: raise ApiError(401,'账号、安全问题或答案不匹配')
+                token=secrets.token_urlsafe(32)
+                with app.connect() as c:
+                    c.execute('DELETE FROM resets WHERE expires<? OR user_id=?',(time.time(),u['id']))
+                    c.execute('INSERT INTO resets VALUES (?,?,?)',(token_hash(token),u['id'],time.time()+300))
+                self.send({'ok':True,'reset_token':token})
+            except ApiError as e: self.send({'error':e.message},e.status)
+            except (ValueError,TypeError,json.JSONDecodeError): self.send({'error':'请求格式错误'},400)
+            except Exception:
+                self.send({'error':'服务暂时不可用，请稍后重试'},500)
+        def password(self,pwd):
+            if not isinstance(pwd,str) or not 8<=len(pwd)<=128: raise ApiError(400,'密码长度需要8–128位')
+            return pwd
+        def answer(self,p):
+            q,a=p.get('security_question_id'),p.get('security_answer')
+            if q not in QUESTIONS or not isinstance(a,str) or not 2<=len(answer_text(a))<=128:
+                raise ApiError(400,'请选择安全问题，答案长度需要2–128位')
+            return q,answer_text(a)
+        def reset(self,p):
+            pwd=self.password(p.get('new_password'))
+            token=p.get('reset_token')
+            if not isinstance(token,str) or len(token)>128: raise ApiError(400,'重置凭证无效')
+            hashed=digest(pwd)
+            with app.connect() as c:
+                c.execute('BEGIN IMMEDIATE')
+                row=c.execute('SELECT * FROM resets WHERE token=? AND expires>?',(token_hash(token),time.time())).fetchone()
+                if not row: raise ApiError(401,'重置凭证已失效，请重新验证安全问题')
+                uid=row['user_id']
+                c.execute('UPDATE users SET password=? WHERE id=?',(hashed,uid))
+                c.execute('DELETE FROM resets WHERE user_id=?',(uid,))
+                c.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+            self.send({'ok':True},cookie=self.cookie(expire=True))
+    return Handler
+
+ACTIVE_STATES = ('starting','charging','stopping','unknown','ending')
+
+class ChargingApp(CustomerAccounts):
+    def __init__(self, db, page, insecure=True, balance_fen=100000):
+        super().__init__(db,page,insecure)
+        self.balance_fen=balance_fen
+        with self.connect() as c:
+            c.executescript('''
+            CREATE TABLE IF NOT EXISTS orders(
+                id TEXT PRIMARY KEY,user_id INTEGER NOT NULL,pile_no TEXT NOT NULL,gun_no INTEGER NOT NULL,
+                serial_no TEXT UNIQUE NOT NULL,status TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL,
+                note TEXT NOT NULL DEFAULT '',transaction_json TEXT);
+            CREATE UNIQUE INDEX IF NOT EXISTS occupied_gun ON orders(pile_no,gun_no)
+                WHERE status IN ('starting','charging','stopping','unknown','ending');
+            ''')
+            c.execute("UPDATE orders SET status='unknown',note='服务重启，等待设备报文核实' WHERE status IN ('starting','stopping')")
+    def active(self,pile,gun):
+        with self.connect() as c:
+            return c.execute("SELECT * FROM orders WHERE pile_no=? AND gun_no=? AND status IN ('starting','charging','stopping','unknown','ending')",(pile,gun)).fetchone()
+    def owned(self,oid,uid):
+        with self.connect() as c:
+            row=c.execute('SELECT * FROM orders WHERE id=? AND user_id=?',(oid,uid)).fetchone()
+        if not row: raise ApiError(404,'订单不存在')
+        return row
+    def device(self,pile,gun):
+        sess=STORE.get_session(pile)
+        with STORE._lock:
+            entry=STORE.latest.get((pile,'%02d'%gun))
+        if not sess: return None,{},'offline'
+        if not entry or entry[0]<time.time()-90 or entry[0]<datetime.fromisoformat(sess.connected_at).timestamp():
+            return sess,{},'unknown'
+        data=dict(entry[1]);data['updated_at']=entry[0]
+        if data.get('_truncated') or data.get('pile_no')!=pile: return sess,{},'unknown'
+        if data.get('status')==1 or data.get('hw_fault'): state='fault'
+        elif data.get('status')==3: state='charging'
+        elif data.get('status')==2: state='idle'
+        elif data.get('status')==0: state='offline'
+        else: state='unknown'
+        return sess,data,state
+    def order_view(self,row):
+        _,data,state=self.device(row['pile_no'],row['gun_no'])
+        if data.get('serial_no')!=row['serial_no']: data={}
+        return {'id':row['id'],'pile_no':row['pile_no'],'gun_no':row['gun_no'],
+                'serial_no':row['serial_no'],'status':row['status'],'note':row['note'],
+                'created_at':row['created'],'updated_at':row['updated'],'device_state':state,
+                'latest':data,'transaction':json.loads(row['transaction_json']) if row['transaction_json'] else None}
+    def customer_get(self,path,raw,uid):
+        if path=='/api/customer/device':
+            q=parse_qs(urlsplit(raw).query)
+            pile,gun=self.target({'pile_no':q.get('pile_no',[''])[0],'gun_no':q.get('gun_no',[''])[0]})
+            _,data,state=self.device(pile,gun)
+            row=self.active(pile,gun)
+            if row and row['user_id']!=uid:
+                return {'availability':'occupied','message':'该枪正在使用中','pile_no':pile,'gun_no':gun}
+            if row:
+                return {'availability':'mine','order':self.order_view(row),'pile_no':pile,'gun_no':gun}
+            if state=='charging': state='occupied'
+            prices={k:{'electricity':v[0]/100000,'service':v[1]/100000} for k,v in CFG.rates.items()}
+            return {'availability':state,'pile_no':pile,'gun_no':gun,'latest':data,
+                    'billing':{'rates':prices,'periods':CFG.periods,'loss_ratio':CFG.loss_ratio},'payment_enabled':False}
+        if path=='/api/customer/orders':
+            with self.connect() as c:
+                rows=c.execute('SELECT * FROM orders WHERE user_id=? ORDER BY created DESC LIMIT 100',(uid,)).fetchall()
+            return {'orders':[self.order_view(r) for r in rows]}
+        match=re.fullmatch(r'/api/customer/orders/([0-9a-f]{32})',path)
+        if match: return {'order':self.order_view(self.owned(match[1],uid))}
+        raise ApiError(404,'接口不存在')
+    def target(self,p):
+        pile=p.get('pile_no','');raw=p.get('gun_no','')
+        if not isinstance(pile,str) or not re.fullmatch(r'\d{14}',pile) or not re.fullmatch(r'\d{1,2}',str(raw)):
+            raise ApiError(400,'桩号或枪号无效')
+        gun=int(raw)
+        if not 1<=gun<=99: raise ApiError(400,'枪号无效')
+        return pile,gun
+    def customer_post(self,path,p,uid):
+        if path=='/api/customer/orders':
+            pile,gun=self.target(p)
+            row=self.active(pile,gun)
+            if row:
+                if row['user_id']!=uid: raise ApiError(409,'该枪正在使用中')
+                return {'order':self.order_view(row)}
+            sess,_,_=self.device(pile,gun)
+            if not sess: raise ApiError(409,'桩离线，无法启动')
+            with sess.gun_locks[gun]:
+                row=self.active(pile,gun)
+                if row:
+                    if row['user_id']!=uid: raise ApiError(409,'该枪正在使用中')
+                    return {'order':self.order_view(row)}
+                current,data,state=self.device(pile,gun)
+                if current is not sess or state!='idle': raise ApiError(409,'设备不是可启动的空闲状态')
+                if data.get('gun_plugged')!=1: raise ApiError(409,'请先插枪')
+                # Use the original serial layout, with decimal BCD suffix and unique DB constraint.
+                serial=(sess.pile_no_bcd+str_to_bcd(str(gun),1)+str_to_bcd(datetime.now().strftime('%y%m%d%H%M%S'),6)+str_to_bcd(str(secrets.randbelow(10000)),2))
+                oid=secrets.token_hex(16);key=serial.hex().upper();now=time.time()
+                try:
+                    with self.connect() as c:
+                        c.execute('INSERT INTO orders(id,user_id,pile_no,gun_no,serial_no,status,created,updated) VALUES (?,?,?,?,?,?,?,?)',
+                                  (oid,uid,pile,gun,key,'starting',now,now))
+                except sqlite3.IntegrityError: raise ApiError(409,'设备订单已变更，请刷新后重试')
+                try:
+                    sess.dl_remote_start(gun,CFG.logic_card_no,'0',self.balance_fen,serial)
+                    ev,box=sess.pending_start[key]
+                    if not ev.wait(START_WAIT): self.set_unknown(key,'启动回复超时，等待设备确认')
+                    # on-frame hook already updates the durable order, including very fast replies.
+                except OSError: self.set_unknown(key,'命令发送中断，结果未知，禁止重复启动')
+                finally: sess.pending_start.pop(key,None)
+                return {'order':self.order_view(self.owned(oid,uid))}
+        match=re.fullmatch(r'/api/customer/orders/([0-9a-f]{32})/stop',path)
+        if not match: raise ApiError(404,'接口不存在')
+        row=self.owned(match[1],uid)
+        if row['status'] not in ACTIVE_STATES: return {'order':self.order_view(row)}
+        gun=row['gun_no'];sess,_,_=self.device(row['pile_no'],gun)
+        if not sess: raise ApiError(409,'设备离线，暂时无法停止；订单仍保留')
+        with sess.gun_locks[gun]:
+            row=self.owned(row['id'],uid)
+            if row['status'] in ('stopping','ending'): return {'order':self.order_view(row)}
+            if row['status'] not in ACTIVE_STATES: return {'order':self.order_view(row)}
+            current,data,state=self.device(row['pile_no'],gun)
+            if current is not sess or state!='charging' or data.get('serial_no')!=row['serial_no']:
+                raise ApiError(409,'无法确认该枪正在执行本人订单，等待最新数据')
+            with self.connect() as c:
+                c.execute("UPDATE orders SET status='stopping',updated=?,note='' WHERE id=?",(time.time(),row['id']))
+            pending_key = None
+            try:
+                pending_key = sess.dl_remote_stop(gun)
+                event,box = sess.customer_stops[pending_key]
+                if event.wait(STOP_WAIT):
+                    if box.get('stop_result')!=1:
+                        with self.connect() as c:
+                            c.execute("UPDATE orders SET status='charging',updated=?,note='设备拒绝停机' WHERE id=? AND status='stopping'",(time.time(),row['id']))
+                    # Success is only acceptance: keep reserved until transaction arrives.
+                else: self.set_unknown(row['serial_no'],'停机回复超时，等待设备确认')
+            except OSError: self.set_unknown(row['serial_no'],'停机发送中断，等待设备确认')
+            finally:
+                if pending_key is not None: sess.customer_stops.pop(pending_key,None)
+            return {'order':self.order_view(self.owned(row['id'],uid))}
+    def set_unknown(self,serial,note):
+        with self.connect() as c:
+            c.execute("UPDATE orders SET status='unknown',note=?,updated=? WHERE serial_no=? AND status IN ('starting','stopping')",(note,time.time(),serial))
+    def start_reply(self,d):
+        with self.connect() as c:
+            c.execute("UPDATE orders SET status=?,note=?,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('starting','unknown')",
+                      ('charging' if d.get('start_result')==1 else 'failed','' if d.get('start_result')==1 else '启动失败，原因：'+str(d.get('fail_reason')),
+                       time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))
+    def realtime(self,d):
+        if d.get('_truncated'): return
+        status=d.get('status');serial=d.get('serial_no')
+        if status not in (2,3): return
+        with self.connect() as c:
+            if status==3:
+                c.execute("UPDATE orders SET status='charging',note='',updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('starting','unknown')",(time.time(),serial,d.get('pile_no'),int(d.get('gun_no','0'))))
+            else:
+                c.execute("UPDATE orders SET status='ending',note='设备已空闲，等待最终交易记录',updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('charging','stopping','unknown')",(time.time(),serial,d.get('pile_no'),int(d.get('gun_no','0'))))
+    def transaction(self,d):
+        if d.get('_truncated'): raise ValueError('交易报文不完整，不能确认客户账单')
+        with self.connect() as c:
+            c.execute("UPDATE orders SET status='finished',note='设备交易已上报；未接支付扣款',transaction_json=?,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=?",
+                      (json.dumps(d,ensure_ascii=False),time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))
+
 def main():
+    global CUSTOMER_APP
     ap = argparse.ArgumentParser(description="云快充平台协议 V1.6 平台端服务")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8768)
-    ap.add_argument("--web-port", type=int, default=8080,
+    ap.add_argument("--web-port", type=int, default=8000,
                     help="Web/API/WebSocket 服务端口")
     ap.add_argument("--token", default="",
                     help="Web 接口静态访问令牌(可选), 前端用 ?token=xxx 或 Bearer 头携带")
@@ -1630,7 +2044,16 @@ def main():
     ap.add_argument("--admin-pass", default="123456", help="管理员密码(默认 123456)")
     ap.add_argument("--offline-timeout", type=int, default=90,
                     help="桩多少秒无数据判离线(默认90s,即3个30s心跳周期)")
+    ap.add_argument("--customer-port", type=int, default=8088, help="客户端口；0禁用")
+    ap.add_argument("--customer-page", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "charge.html"))
+    ap.add_argument("--customer-db", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "customer_data", "customers.sqlite3"))
+    ap.add_argument("--customer-https", action="store_true", help="HTTPS反向代理模式，启用Secure Cookie")
+    ap.add_argument("--customer-test-balance-fen", type=int, default=100000, help="联调下发额度(分)，不是客户充值或支付")
     args = ap.parse_args()
+    if args.customer_port and len({args.port,args.web_port,args.customer_port}) != 3:
+        ap.error("设备、管理、客户端口不能重复")
+    if not 1 <= args.customer_test_balance_fen <= 0xFFFFFFFF:
+        ap.error("联调额度无效")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -1642,6 +2065,14 @@ def main():
     server.daemon_threads = True
     log.info("云快充平台服务启动: %s:%d (充电桩TCP)", args.host, args.port)
 
+    customer_http = None
+    if args.customer_port:
+        CUSTOMER_APP = ChargingApp(args.customer_db, args.customer_page,
+                                   not args.customer_https, args.customer_test_balance_fen)
+        customer_http = ThreadingHTTPServer(("0.0.0.0", args.customer_port), handler_for(CUSTOMER_APP))
+        threading.Thread(target=customer_http.serve_forever, daemon=True).start()
+        log.info("客户服务已启动: 端口%d HTTP=%s（联调额度，未接支付）", args.customer_port, not args.customer_https)
+
     web = WebApiServer("0.0.0.0", args.web_port, token=args.token,
                        credentials={args.admin_user: args.admin_pass})
     web.start()
@@ -1651,6 +2082,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if customer_http:
+            customer_http.shutdown()
+            customer_http.server_close()
         server.server_close()
         log.info("服务已停止")
 
