@@ -6,3 +6,6 @@ __pycache__/
 transactions.json
 stations.json
 faults.json
+*.sqlite3
+*.sqlite3-*
+customer_data/
