@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智学客云充电运行管理平台</title>
+<style>
+:root{
+  --primary:#1677ff; --primary-d:#0958d9; --bg:#f2f4f7; --panel:#ffffff;
+  --border:#e5e7eb; --fg:#1f2329; --dim:#8a919f; --green:#00b42a; --red:#f53f3f;
+  --orange:#ff7d00; --cyan:#0fc6c2; --violet:#722ed1; --head:#001529;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.6 "PingFang SC","Microsoft YaHei",sans-serif}
+/* ---------- 顶栏 ---------- */
+.topbar{height:56px;background:linear-gradient(90deg,#001529,#003a75);color:#fff;display:flex;align-items:center;
+  padding:0 20px;gap:14px;position:sticky;top:0;z-index:8;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.topbar .logo{font-size:20px;font-weight:700;letter-spacing:1px}
+.topbar .logo small{font-size:12px;font-weight:400;opacity:.65;margin-left:8px}
+.topbar .nav{margin-left:30px;display:flex;gap:4px;flex:1}
+.topbar .nav a{color:rgba(255,255,255,.75);text-decoration:none;padding:6px 14px;border-radius:6px;font-size:14px;cursor:pointer}
+.topbar .nav a.on,.topbar .nav a:hover{background:rgba(255,255,255,.14);color:#fff}
+.topbar .right{font-size:12px;opacity:.85;display:flex;align-items:center;gap:10px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
+.dot.on{background:var(--green);box-shadow:0 0 6px var(--green)} .dot.off{background:#ff4d4f}
+/* ---------- 布局 ---------- */
+.layout{display:flex;min-height:calc(100vh - 56px)}
+.side{width:200px;background:#001529;padding:12px 8px;flex-shrink:0}
+.side a{display:block;color:rgba(255,255,255,.65);text-decoration:none;padding:11px 16px;border-radius:8px;
+  margin-bottom:4px;font-size:14px;cursor:pointer}
+.side a.on,.side a:hover{background:var(--primary);color:#fff}
+.main{flex:1;padding:18px;min-width:0}
+.page{display:none}.page.on{display:block}
+/* ---------- 总览 ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:16px}
+.stat-card{background:var(--panel);border-radius:10px;padding:16px 18px;box-shadow:0 1px 4px rgba(0,21,41,.06);position:relative;overflow:hidden}
+.stat-card::after{content:"";position:absolute;right:-18px;top:-18px;width:74px;height:74px;border-radius:50%;opacity:.09;background:var(--c,#1677ff)}
+.stat-card .t{color:var(--dim);font-size:13px}
+.stat-card .v{font-size:28px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.stat-card .v small{font-size:13px;font-weight:400;color:var(--dim);margin-left:4px}
+.panel{background:var(--panel);border-radius:10px;box-shadow:0 1px 4px rgba(0,21,41,.06);padding:16px 18px;margin-bottom:16px}
+.panel h2{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.panel h2 .more{margin-left:auto;font-size:12px;color:var(--dim);font-weight:400}
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#fafafa;color:var(--dim);font-weight:500;padding:10px 12px;text-align:left;white-space:nowrap}
+td{padding:10px 12px;border-top:1px solid var(--border);white-space:nowrap;font-variant-numeric:tabular-nums}
+tr:hover td{background:#f7faff}
+.tag{display:inline-block;padding:1px 10px;border-radius:10px;font-size:12px;line-height:20px}
+.t-green{color:var(--green);background:rgba(0,180,42,.1)} .t-blue{color:var(--primary);background:rgba(22,119,255,.1)}
+.t-red{color:var(--red);background:rgba(245,63,63,.1)} .t-orange{color:var(--orange);background:rgba(255,125,0,.12)}
+.t-gray{color:var(--dim);background:rgba(138,145,159,.12)} .t-violet{color:var(--violet);background:rgba(114,46,209,.1)}
+/* ---------- 按钮 ---------- */
+button{cursor:pointer;border:1px solid var(--border);background:#fff;color:var(--fg);border-radius:6px;
+  padding:5px 14px;font-size:13px;transition:all .15s}
+button:hover{border-color:var(--primary);color:var(--primary)}
+button.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+button.primary:hover{background:var(--primary-d)}
+button.danger{color:var(--red);border-color:#ffd0cc;background:#fff}
+button.danger:hover{background:var(--red);color:#fff;border-color:var(--red)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.op-btns{display:flex;gap:6px;flex-wrap:wrap}
+.op-btns button{white-space:nowrap;padding:5px 10px;font-size:12px;line-height:1.5;
+  flex:0 1 auto;min-width:fit-content;text-align:center}
+.dev-card .op-btns{flex-wrap:nowrap;justify-content:space-between}
+.dev-card .op-btns button{flex:1 1 0;padding:5px 4px;font-size:12px}
+/* ---------- 设备卡片 ---------- */
+.dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px}
+.dev-card{background:var(--panel);border-radius:10px;box-shadow:0 1px 4px rgba(0,21,41,.06);padding:16px 18px}
+.dev-card .head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.dev-card .head h3{font-size:15px}
+.dev-card .head .tag{margin-left:auto}
+.dev-card .sub{color:var(--dim);font-size:12px;margin-bottom:12px}
+.kv{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.kv .m{background:#f7f8fa;border-radius:8px;padding:8px;text-align:center}
+.kv .m .t{font-size:11px;color:var(--dim)} .kv .m .v{font-size:18px;font-weight:600;margin-top:2px}
+.kv .m .v small{font-size:11px;color:var(--dim);font-weight:400}
+.dev-card canvas{width:100%;height:60px;background:#f7f8fa;border-radius:8px;margin-bottom:12px}
+.chart-canvas{width:100%;height:auto;display:block}
+/* ---------- 日志 ---------- */
+#log{background:#0d1421;color:#c9d4e3;border-radius:8px;padding:12px;height:260px;overflow-y:auto;
+  font:12px/1.8 Consolas,Menlo,monospace}
+.l-up{color:#6cb6ff}.l-down{color:#d2a8ff}.l-info{color:#7d8590}.l-ok{color:#56d364}.l-err{color:#ff7b72}.l-warn{color:#e3b341}
+/* ---------- 弹窗 ---------- */
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:20}
+.mask.on{display:flex}
+.modal{background:#fff;border-radius:12px;width:400px;padding:22px 24px;box-shadow:0 8px 30px rgba(0,0,0,.2)}
+.modal h3{font-size:16px;margin-bottom:16px}
+.modal label{display:block;font-size:13px;color:var(--dim);margin-bottom:10px}
+.modal input{width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px}
+.modal input:focus{outline:none;border-color:var(--primary)}
+.modal .btns{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+/* ---------- 登录页 ---------- */
+.login-mask{position:fixed;inset:0;z-index:50;background:linear-gradient(135deg,#001529 0%,#003a75 60%,#1677ff 100%);
+  display:flex;align-items:center;justify-content:center}
+.login-box{background:#fff;border-radius:14px;width:380px;padding:36px 36px 28px;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+.login-box .lg-logo{text-align:center;font-size:22px;font-weight:700;color:#003a75;margin-bottom:4px}
+.login-box .lg-sub{text-align:center;font-size:12px;color:var(--dim);margin-bottom:24px}
+.login-box label{display:block;font-size:13px;color:var(--dim);margin-bottom:14px}
+.login-box input{width:100%;margin-top:5px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px}
+.login-box input:focus{outline:none;border-color:var(--primary)}
+.login-box button{width:100%;padding:10px;font-size:15px;margin-top:6px}
+.login-err{color:var(--red);font-size:13px;text-align:center;min-height:20px;margin-top:10px}
+.login-foot{text-align:center;color:var(--dim);font-size:12px;margin-top:18px}
+.logout{color:rgba(255,255,255,.75);cursor:pointer;margin-left:8px}
+/* ---------- 运营总览新版 ---------- */
+.cd-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.cd-card{border-radius:10px;padding:16px 18px;color:#fff;position:relative;overflow:hidden}
+.cd-card .t{font-size:13px;opacity:.92}
+.cd-card .v{font-size:26px;font-weight:700;margin-top:6px;font-variant-numeric:tabular-nums}
+.cd-card.c1{background:linear-gradient(135deg,#00b42a,#009829)}
+.cd-card.c2{background:linear-gradient(135deg,#ff7d00,#f56a00)}
+.cd-card.c3{background:linear-gradient(135deg,#0fc6c2,#0aa8a4)}
+.cd-card.c4{background:linear-gradient(135deg,#722ed1,#531bab)}
+.cd-card.c5{background:linear-gradient(135deg,#1677ff,#0958d9)}
+.rt-row{display:flex;flex-wrap:wrap;gap:16px 44px}
+.rt-item{display:flex;align-items:center;gap:10px}
+.rt-ico{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px}
+.rt-item .n{font-size:24px;font-weight:700;line-height:1.1}
+.rt-item .t{font-size:12px;color:var(--dim)}
+.daybtn{padding:4px 12px;font-size:12px}
+.daybtn.on{background:var(--primary);color:#fff;border-color:var(--primary)}
+.charts-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:14px}
+.lg{display:flex;gap:16px;justify-content:center;margin-top:8px;font-size:12px;color:var(--dim)}
+.lg i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
+select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:#fff}
+.logout:hover{color:#fff}
+.toast{position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#fff;border:1px solid var(--primary);
+  box-shadow:0 4px 16px rgba(0,0,0,.12);padding:10px 20px;border-radius:8px;display:none;z-index:30;font-size:13px}
+.empty{color:var(--dim);text-align:center;padding:36px 0}
+</style>
+</head>
+<body>
+
+<!-- ========== 登录页 ========== -->
+<div class="login-mask" id="loginMask">
+  <div class="login-box">
+    <div class="lg-logo">⚡ 智学客云充电运行管理平台</div>
+    <div class="lg-sub">ZHIXUEKE CLOUD CHARGING OPERATION PLATFORM</div>
+    <label>用户名<input id="lgUser" value="" placeholder="请输入用户名" autocomplete="username"></label>
+    <label>密码<input id="lgPwd" type="password" placeholder="请输入密码" autocomplete="current-password"></label>
+    <button class="primary" id="lgBtn">登 录</button>
+    <div class="login-err" id="lgErr"></div>
+    <div class="login-foot">云快充协议 V1.6 · 充电桩接入端口 8768</div>
+  </div>
+</div>
+
+<header class="topbar">
+  <div class="logo">⚡ 智学客<small>云充电运行管理平台</small></div>
+  <nav class="nav">
+    <a data-page="overview" class="on">运营总览</a>
+    <a data-page="devices">设备监控</a>
+    <a data-page="orders">充电记录</a>
+    <a data-page="faults">故障管理</a>
+    <a data-page="stations">充电站管理</a>
+    <a data-page="logs">报文日志</a>
+  </nav>
+  <div class="right">
+    <span><i class="dot on" id="wsDot"></i><span id="wsText">已连接</span></span>
+    <span id="clock">--</span><span class="logout" id="btnLogout">⏻ 退出</span>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <a data-page="overview" class="on">📊 运营总览</a>
+    <a data-page="devices">🔌 设备监控</a>
+    <a data-page="orders">📋 充电记录</a>
+    <a data-page="faults">🛠 故障管理</a>
+    <a data-page="stations">🏢 充电站管理</a>
+    <a data-page="logs">📜 报文日志</a>
+  </aside>
+
+  <main class="main">
+    <!-- ========== 运营总览 ========== -->
+    <section class="page on" id="page-overview">
+      <!-- 充电数据 -->
+      <div class="panel">
+        <h2>⚡ 充电数据
+          <span class="more">
+            <select id="statStation" onchange="statStationChange()"><option value="">全部电站</option></select>
+            <button class="daybtn on" data-day="today" onclick="setDay(this)">今日</button>
+            <button class="daybtn" data-day="yesterday" onclick="setDay(this)">昨日</button>
+            <button class="daybtn" data-day="" onclick="setDay(this)">全部</button>
+          </span>
+        </h2>
+        <div class="cd-row">
+          <div class="cd-card c1"><div class="t">充电电量(度)</div><div class="v" id="cdEnergy">0.0000</div></div>
+          <div class="cd-card c2"><div class="t">充电次数(单)</div><div class="v" id="cdCount">0</div></div>
+          <div class="cd-card c3"><div class="t">订单应收金额(元)</div><div class="v" id="cdAmount">0.0000</div></div>
+          <div class="cd-card c4"><div class="t">订单应收电费(元)</div><div class="v" id="cdElec">0.0000</div></div>
+          <div class="cd-card c5"><div class="t">订单应收服务费(元)</div><div class="v" id="cdSvc">0.0000</div></div>
+        </div>
+      </div>
+      <!-- 实时状态 -->
+      <div class="panel">
+        <h2>📟 实时状态 <span class="more" id="rtTime"></span></h2>
+        <div class="rt-row">
+          <div class="rt-item"><span class="rt-ico" style="background:rgba(0,180,42,.13)">⚡</span><div><div class="n" id="rtCharge">0</div><div class="t">充电中</div></div></div>
+          <div class="rt-item"><span class="rt-ico" style="background:rgba(22,119,255,.12)">🟢</span><div><div class="n" id="rtIdle">0</div><div class="t">空闲中</div></div></div>
+          <div class="rt-item"><span class="rt-ico" style="background:rgba(138,145,159,.15)">⬜</span><div><div class="n" id="rtOffline">0</div><div class="t">离线中</div></div></div>
+          <div class="rt-item"><span class="rt-ico" style="background:rgba(245,63,63,.12)">🔴</span><div><div class="n" id="rtFault">0</div><div class="t">故障中</div></div></div>
+          <div class="rt-item"><span class="rt-ico" style="background:rgba(255,125,0,.13)">🅿️</span><div><div class="n" id="rtOccupy">0</div><div class="t">占用中(插枪)</div></div></div>
+        </div>
+      </div>
+      <!-- 场站经营数据 -->
+      <div class="charts-row">
+        <div class="panel">
+          <h2>📈 场站经营数据 · 充电趋势（近30天）</h2>
+          <canvas id="trendChart" class="chart-canvas" width="900" height="280"></canvas>
+          <div class="lg"><span><i style="background:#00b42a"></i>充电电量(度)</span><span><i style="background:#ff7d00"></i>充电次数(单)</span><span><i style="background:#1677ff"></i>订单金额(元)</span></div>
+        </div>
+        <div class="panel">
+          <h2>🕒 场站经营数据 · 时段分布（0~23时）</h2>
+          <canvas id="hourChart" class="chart-canvas" width="900" height="280"></canvas>
+          <div class="lg"><span><i style="background:#00b42a"></i>充电电量(度)</span><span><i style="background:#ff7d00"></i>充电次数(单)</span><span><i style="background:#1677ff"></i>订单金额(元)</span></div>
+        </div>
+      </div>
+      <!-- 充电桩实时状态表 -->
+      <div class="panel">
+        <h2>🔌 充电桩实时状态 <span class="more" id="ovTime"></span></h2>
+        <div style="overflow-x:auto">
+        <table id="ovTable"><thead><tr>
+          <th>桩编号</th><th>所属站点</th><th>连接地址</th><th>接入时间</th><th>枪</th><th>枪状态</th><th>桩状态</th>
+          <th>电压(V)</th><th>电流(A)</th><th>功率(kW)</th><th>SOC(%)</th><th>已充(kWh)</th><th>金额(元)</th><th>操作</th>
+        </tr></thead><tbody><tr><td colspan="14" class="empty">暂无充电桩接入，等待桩上线…</td></tr></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 设备监控 ========== -->
+    <section class="page" id="page-devices">
+      <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 18px">
+        <b>🔍 设备筛选</b>
+        <select id="devStationFilter" onchange="applyDevFilter()"><option value="">全部电站</option></select>
+        <input id="devSearch" placeholder="搜索桩编号，如 301800…" oninput="applyDevFilter()"
+               style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;width:220px">
+        <select id="devStatusFilter" onchange="applyDevFilter()">
+          <option value="">全部状态</option><option value="3">充电中</option>
+          <option value="2">空闲</option><option value="1">故障</option><option value="off">离线</option>
+        </select>
+        <span id="devCount" style="color:var(--dim);font-size:12px;margin-left:auto"></span>
+      </div>
+      <div class="dev-grid" id="devGrid"><div class="empty" style="grid-column:1/-1">暂无设备</div></div>
+    </section>
+
+    <!-- ========== 交易记录 ========== -->
+    <section class="page" id="page-orders">
+      <div class="panel">
+        <h2>📋 全部充电记录</h2>
+        <p style="color:var(--dim);font-size:13px">客户订单与桩交易合并显示，同一流水不重复计数。无关联账号的刷卡、后台启机等交易显示为“未关联用户”。</p>
+        <form id="recordFilters" style="display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin:16px 0">
+          <label>桩编号<input name="pile_no" placeholder="桩号，支持部分匹配" maxlength="128"></label>
+          <label>枪号<input name="gun_no" type="number" min="1" max="99" placeholder="全部"></label>
+          <label>客户账号<input name="username" placeholder="账号，支持部分匹配" maxlength="128"></label>
+          <label>流水号<input name="serial_no" placeholder="流水号，支持部分匹配" maxlength="128"></label>
+          <label>状态<select name="status"><option value="">全部</option><option value="starting">正在启动</option><option value="charging">充电中</option><option value="stopping">正在停止</option><option value="unknown">结果待确认</option><option value="ending">等待账单</option><option value="finished">已结束</option><option value="failed">启动失败</option></select></label>
+          <label>来源<select name="source"><option value="">全部</option><option value="customer">客户订单</option><option value="device">未关联客户的桩交易</option></select></label>
+          <label>开始日期<input name="date_from" type="date"></label>
+          <label>结束日期<input name="date_to" type="date"></label>
+          <button class="primary" type="submit">查询</button><button type="button" id="recordReset">重置</button><button type="button" id="recordRefresh">刷新</button>
+        </form>
+        <div id="recordSummary" style="margin:12px 0;color:var(--dim)">正在加载…</div>
+        <div id="recordError" role="status" style="color:var(--red)"></div>
+        <div style="overflow-x:auto">
+        <table id="txTable"><thead><tr>
+          <th>客户账号</th><th>状态</th><th>流水号</th><th>桩编号</th><th>枪</th><th>开始/创建时间</th><th>结束时间</th>
+          <th>电量(kWh)</th><th>计损电量(kWh)</th><th>金额(元)</th><th>VIN</th><th>启动方式</th><th>停止原因</th><th>来源</th><th>备注</th>
+        </tr></thead><tbody><tr><td colspan="15" class="empty">暂无记录</td></tr></tbody></table>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;margin-top:16px"><button id="recordPrev">上一页</button><span id="recordPage">第1页</span><button id="recordNext">下一页</button><label>每页<select id="recordSize"><option value="20">20</option><option value="50" selected>50</option><option value="100">100</option></select></label></div>
+      </div>
+    </section>
+
+    <!-- ========== 故障管理 ========== -->
+    <section class="page" id="page-faults">
+      <div class="panel">
+        <h2>🔥 现存故障 <span class="more" id="faultStat"></span></h2>
+        <div style="overflow-x:auto">
+        <table id="activeFaultTable"><thead><tr>
+          <th>故障类型</th><th>桩编号</th><th>枪</th><th>故障详情</th><th>发生时间</th><th>状态</th><th>操作</th>
+        </tr></thead><tbody><tr><td colspan="7" class="empty">暂无现存故障 🎉</td></tr></tbody></table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>📁 历史故障 <span class="more" id="histStat"></span></h2>
+        <div style="overflow-x:auto">
+        <table id="historyFaultTable"><thead><tr>
+          <th>故障类型</th><th>桩编号</th><th>枪</th><th>故障详情</th><th>发生时间</th>
+          <th>处理完成时间</th><th>处理人员</th><th>派发对象</th><th>状态</th>
+        </tr></thead><tbody><tr><td colspan="9" class="empty">暂无历史故障</td></tr></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 充电站管理 ========== -->
+    <section class="page" id="page-stations">
+      <div class="panel">
+        <h2>🏢 充电站列表
+          <span class="more"><button class="primary" onclick="openStationModal()">＋ 新建充电站</button></span>
+        </h2>
+        <div id="stationList"><div class="empty">暂无充电站，点击右上角"新建充电站"</div></div>
+      </div>
+    </section>
+
+    <!-- ========== 报文日志 ========== -->
+    <section class="page" id="page-logs">
+      <div class="panel">
+        <h2>📜 实时报文日志
+          <span class="more">
+            <button onclick="downloadLog()">⬇ 下载日志</button>
+            <button class="danger" onclick="askClearLog()">🗑 清空日志</button>
+          </span>
+        </h2>
+        <div id="log"></div>
+      </div>
+      <div class="panel">
+        <h2>📖 报文解读
+          <span class="more">
+            <select id="plainFilter" onchange="renderPlain()"><option value="">全部充电桩</option></select>
+          </span>
+        </h2>
+        <div id="plainLog" style="background:#f7f8fa;border:1px solid var(--border);border-radius:8px;
+             padding:12px;height:240px;overflow-y:auto;font:13px/1.9 Consolas,Menlo,monospace;color:var(--fg)"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 启动充电弹窗 -->
+<div class="mask" id="startMask">
+  <div class="modal">
+    <h3>▶ 远程启动充电 <span id="sPile" style="color:var(--primary)"></span></h3>
+    <label>枪号<input id="sGun" value="1"></label>
+    <label>逻辑卡号<input id="sLogic" value="1000000000000000"></label>
+    <label>物理卡号(16进制,可填0)<input id="sPhys" value="0000000000000000"></label>
+    <label>账户余额（元）<input id="sBalance" value="1000.00"></label>
+    <div class="btns">
+      <button id="sCancel">取消</button>
+      <button class="primary" id="sOk">下发启机指令 (0x34)</button>
+    </div>
+  </div>
+</div>
+
+<!-- 停止充电弹窗 -->
+<div class="mask" id="stopMask">
+  <div class="modal">
+    <h3>⏹ 远程停止充电 <span id="pPile" style="color:var(--red)"></span></h3>
+    <label>枪号<input id="pGun" value="1"></label>
+    <div class="btns">
+      <button id="pCancel">取消</button>
+      <button class="danger" id="pOk">下发停机指令 (0x36)</button>
+    </div>
+  </div>
+</div>
+
+<!-- 站点编辑弹窗 -->
+<div class="mask" id="stationMask">
+  <div class="modal">
+    <h3 id="stTitle">新建充电站</h3>
+    <label>站点名称<input id="stName" placeholder="如：智学客一号充电站"></label>
+    <label>站点地址<input id="stAddr" placeholder="选填"></label>
+    <label>站内充电桩编号（多个用逗号或换行分隔）<textarea id="stPiles" rows="3" placeholder="32010601330450, 32010601330451" style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px"></textarea></label>
+    <div class="btns">
+      <button onclick="document.getElementById('stationMask').classList.remove('on')">取消</button>
+      <button class="primary" id="stOk">保 存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 清空日志：备份提醒弹窗 -->
+<div class="mask" id="backupMask">
+  <div class="modal">
+    <h3>⚠ 清空前请备份</h3>
+    <p style="font-size:13px;color:var(--dim);margin-bottom:16px">
+      日志文件清空后<b style="color:var(--red)">不可恢复</b>。<br>
+      若尚未保存历史报文，请先下载备份。
+    </p>
+    <div class="btns">
+      <button onclick="backupGo()">⬇ 去处理（下载备份）</button>
+      <button class="primary" onclick="backupDone()">✔ 已备份，继续清空</button>
+    </div>
+  </div>
+</div>
+
+<!-- 清空日志：最终确认弹窗 -->
+<div class="mask" id="clearMask">
+  <div class="modal">
+    <h3>🗑 确认清空日志？</h3>
+    <p style="font-size:13px;color:var(--dim);margin-bottom:16px">
+      即将清空服务器上的 <b>ykc_server.log</b> 文件内容，<br>
+      磁盘占用将归零，此操作不可撤销。
+    </p>
+    <div class="btns">
+      <button onclick="document.getElementById('clearMask').classList.remove('on')">取消</button>
+      <button class="danger" id="clearOk">确认清空</button>
+    </div>
+  </div>
+</div>
+
+<!-- 派发工单弹窗 -->
+<div class="mask" id="dispatchMask">
+  <div class="modal">
+    <h3>📨 派发维修工单 <span id="dpFault" style="color:var(--primary);font-size:13px"></span></h3>
+    <label>处理人员（必填）<input id="dpPerson" placeholder="如：张师傅"></label>
+    <label>备注<textarea id="dpNote" rows="3" placeholder="故障描述、处理要求等（选填）" style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px"></textarea></label>
+    <div class="btns">
+      <button onclick="document.getElementById('dispatchMask').classList.remove('on')">取消</button>
+      <button class="primary" id="dpOk">生成并派发工单</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const URL_TOKEN = new URLSearchParams(location.search).get("token") || "";
+let TOKEN = sessionStorage.getItem("ykc_token") || URL_TOKEN;
+const qs = () => TOKEN ? ("?token=" + TOKEN) : "";
+const $ = s => document.querySelector(s);
+const piles = {};                 // no -> {row, dev, latest:{gun:data}, hist:{gun:[]}, gunHealth}
+const ST_TEXT = {0:"离线",1:"故障",2:"空闲",3:"充电中"};
+const ST_TAG  = {0:"t-gray",1:"t-red",2:"t-blue",3:"t-green"};
+
+/* ---------- 通用 ---------- */
+function toast(msg, ok=true){
+  const t=$("#toast"); t.textContent=msg;
+  t.style.borderColor = ok?"var(--green)":"var(--red)";
+  t.style.display="block"; clearTimeout(t._h);
+  t._h=setTimeout(()=>t.style.display="none",4000);
+}
+function logline(cls,text){
+  const el=$("#log"), d=document.createElement("div");
+  d.className=cls; d.textContent=text;
+  el.appendChild(d); while(el.children.length>400) el.removeChild(el.firstChild);
+  el.scrollTop=el.scrollHeight;
+}
+setInterval(()=>{ $("#clock").textContent = new Date().toLocaleString(); },1000);
+
+/* ---------- 页面切换 ---------- */
+document.querySelectorAll("[data-page]").forEach(a=>{
+  a.onclick=()=>{
+    document.querySelectorAll("[data-page]").forEach(x=>x.classList.toggle("on",x===a));
+    document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on",p.id==="page-"+a.dataset.page));
+    if(a.dataset.page==="orders")initTx();
+  };
+});
+
+/* ---------- 总览表 ---------- */
+function ensureRow(no){
+  if(piles[no]) return piles[no];
+  const tb=$("#ovTable tbody");
+  if(tb.querySelector("td[colspan]")) tb.innerHTML="";
+  const tr=document.createElement("tr");
+  tr.innerHTML=`<td><b>${no}</b></td><td class="station"><span class="tag t-gray">未分组</span></td><td class="addr">--</td><td class="ct">--</td>
+    <td class="gun">01</td><td class="ghealth"><span class="tag t-green">正常</span></td>
+    <td class="st"><span class="tag t-gray">离线</span></td>
+    <td class="vol">--</td><td class="cur">--</td><td class="pwr">--</td>
+    <td class="soc">--</td><td class="kwh">--</td><td class="amt">--</td>
+    <td><div class="op-btns">
+      <button class="primary" onclick="openStart('${no}')">启机</button>
+      <button class="danger" onclick="openStop('${no}')">停机</button>
+    </div></td>`;
+  tb.appendChild(tr);
+
+  const dev=document.createElement("div"); dev.className="dev-card";
+  dev.innerHTML=`
+    <div class="head"><h3>🔌 ${no}</h3><span class="tag dst t-gray">离线</span></div>
+    <div class="sub dsub"></div>
+    <div class="kv">
+      <div class="m"><div class="t">电压</div><div class="v dvol">--<small> V</small></div></div>
+      <div class="m"><div class="t">电流</div><div class="v dcur">--<small> A</small></div></div>
+      <div class="m"><div class="t">功率</div><div class="v dpwr">--<small> kW</small></div></div>
+      <div class="m"><div class="t">SOC</div><div class="v dsoc">--<small> %</small></div></div>
+      <div class="m"><div class="t">电池温度</div><div class="v dbt">--<small> ℃</small></div></div>
+      <div class="m"><div class="t">累计时长</div><div class="v dct">--<small> min</small></div></div>
+      <div class="m"><div class="t">已充电量</div><div class="v dkwh">--<small> kWh</small></div></div>
+      <div class="m"><div class="t">已充金额</div><div class="v damt">--<small> 元</small></div></div>
+    </div>
+    <canvas width="640" height="60"></canvas>
+    <div class="op-btns">
+      <button class="primary" onclick="openStart('${no}')">▶ 启动</button>
+      <button class="danger" onclick="openStop('${no}')">⏹ 停止</button>
+      <button onclick="apiCmd('${no}','sync_time')">🕒 对时</button>
+      <button onclick="apiCmd('${no}','read_realtime',{gun_no:1})">↻ 召唤数据</button>
+      <button onclick="apiCmd('${no}','billing_model')">¥ 下发费率</button>
+    </div>`;
+  const eg=$("#devGrid .empty"); if(eg) eg.remove();
+  $("#devGrid").appendChild(dev);
+
+  piles[no]={row:tr, dev:dev, latest:{}, hist:{}, gunHealth:{},
+             lastSeen:Date.now(), offlineMarked:false};
+  applyDevFilter();
+  tr.querySelector(".station").innerHTML =
+    `<span class="tag ${stationMap[no]?"t-violet":"t-gray"}">${stationMap[no]||"未分组"}</span>`;
+  updateStats();
+  return piles[no];
+}
+function markOffline(no){
+  const c=piles[no]; if(!c||c.offlineMarked) return;
+  c.offlineMarked=true;
+  refreshStationChip(no); applyDevFilter();
+  c.row.querySelector(".st").innerHTML='<span class="tag t-gray">离线</span>';
+  c.dev.querySelector(".dst").className="tag dst t-gray";
+  c.dev.querySelector(".dst").textContent="离线";
+}
+
+function updateRow(no, d){
+  const c=ensureRow(no), tr=c.row;
+  const st=d.status??2, vol=d.out_voltage/10, cur=d.out_current/10;
+  c.latest[d.gun_no||"01"]=d;
+  tr.querySelector(".gun").textContent=d.gun_no||"01";
+  tr.querySelector(".st").innerHTML=`<span class="tag ${ST_TAG[st]||"t-blue"}">${ST_TEXT[st]||st}</span>`;
+  tr.querySelector(".vol").textContent=vol.toFixed(1);
+  tr.querySelector(".cur").textContent=cur.toFixed(1);
+  tr.querySelector(".pwr").textContent=(vol*cur/1000).toFixed(2);
+  tr.querySelector(".soc").textContent=d.soc??"--";
+  tr.querySelector(".kwh").textContent=(d.energy/10000).toFixed(2);
+  tr.querySelector(".amt").textContent=(d.amount/10000).toFixed(2);
+  const gh=c.gunHealth[d.gun_no||"01"];
+  tr.querySelector(".ghealth").innerHTML=`<span class="tag ${gh?"t-red":"t-green"}">${gh?"故障":"正常"}</span>`;
+  // 设备卡
+  const dv=c.dev;
+  dv.querySelector(".dst").className="tag dst "+(ST_TAG[st]||"t-blue");
+  dv.querySelector(".dst").textContent=ST_TEXT[st]||st;
+  dv.querySelector(".dvol").innerHTML=vol.toFixed(1)+"<small> V</small>";
+  dv.querySelector(".dcur").innerHTML=cur.toFixed(1)+"<small> A</small>";
+  dv.querySelector(".dpwr").innerHTML=(vol*cur/1000).toFixed(2)+"<small> kW</small>";
+  dv.querySelector(".dsoc").innerHTML=(d.soc??"--")+"<small> %</small>";
+  dv.querySelector(".dbt").innerHTML=((d.batt_max_temp!=null&&st===3)?(d.batt_max_temp-50):"--")+"<small> ℃</small>";
+  dv.querySelector(".dct").innerHTML=(d.charge_time??0)+"<small> min</small>";
+  dv.querySelector(".dkwh").innerHTML=(d.energy/10000).toFixed(2)+"<small> kWh</small>";
+  dv.querySelector(".damt").innerHTML=(d.amount/10000).toFixed(2)+"<small> 元</small>";
+  const g=d.gun_no||"01";
+  (c.hist[g]=c.hist[g]||[]).push(vol*cur/1000);
+  if(c.hist[g].length>90) c.hist[g].shift();
+  drawSpark(dv.querySelector("canvas"), c.hist[g]);
+  updateStats();
+}
+function drawSpark(cv, arr){
+  const ctx=cv.getContext("2d"); ctx.clearRect(0,0,cv.width,cv.height);
+  if(!arr||arr.length<2) return;
+  const max=Math.max(...arr,.001);
+  ctx.beginPath(); ctx.strokeStyle="#1677ff"; ctx.lineWidth=1.6;
+  arr.forEach((v,i)=>{
+    const x=i/(arr.length-1)*(cv.width-6)+3, y=cv.height-5-(v/max)*(cv.height-12);
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  });
+  ctx.stroke();
+  ctx.fillStyle="#8a919f"; ctx.font="10px sans-serif"; ctx.fillText(max.toFixed(2)+" kW", 5, 11);
+}
+function updateStats(){
+  let charging=0, idle=0, offline=0, fault=0, occupied=0;
+  for(const no in piles){
+    const c=piles[no];
+    if(c.offlineMarked){ offline++; continue; }
+    let has=false;
+    for(const g in c.latest){
+      has=true; const d=c.latest[g];
+      if(d.status===3) charging++;
+      else if(d.status===1||d.status===0) fault++;
+      else if(d.status===2){ if(d.gun_plugged===1) occupied++; else idle++; }
+    }
+    if(!has) idle++;
+    for(const g in c.gunHealth) if(c.gunHealth[g]) fault++;
+  }
+  $("#rtCharge").textContent=charging;
+  $("#rtIdle").textContent=idle;
+  $("#rtOffline").textContent=offline;
+  $("#rtFault").textContent=fault;
+  $("#rtOccupy").textContent=occupied;
+  const t="刷新于 "+new Date().toLocaleTimeString();
+  $("#rtTime").textContent=t; $("#ovTime").textContent=t;
+}
+
+/* ---------- 交易记录 ---------- */
+let txCount=0, txAmount=0;
+let recordPage=1,recordPages=1,recordFilters={},recordRequest=0,recordTimer;
+const ORDER_STATUS={starting:'正在启动',charging:'充电中',stopping:'正在停止',unknown:'结果待确认',ending:'等待账单',finished:'已结束',failed:'启动失败'};
+function recordRow(d){
+ const tx=d.transaction||{},flagMap={1:'APP',2:'刷卡',4:'离线卡',5:'VIN'};
+ const amount=d.amount==null?'—':Number(d.amount).toFixed(4)+(d.amount_final?'':'（实时）');
+ const values=[d.username||(d.user_id?'已删除账号':'未关联用户'),ORDER_STATUS[d.status]||d.status,d.serial_no,d.pile_no,String(d.gun_no).padStart(2,'0'),d.start_time||d.record_time,d.end_time||'—',d.energy==null?'—':Number(d.energy).toFixed(4),tx.total_loss_energy==null?'—':(tx.total_loss_energy/10000).toFixed(4),amount,tx.vin||'—',flagMap[tx.trade_flag]||tx.trade_flag||'—',tx.stop_reason??'—',d.source==='customer'?'客户订单':'桩交易',d.note||'—'];
+ const row=document.createElement('tr');for(const value of values){const cell=document.createElement('td');cell.textContent=value??'—';row.appendChild(cell);}return row;
+}
+async function initTx(){
+ if(!TOKEN)return;const request=++recordRequest;
+ const query=new URLSearchParams({...recordFilters,page:String(recordPage),page_size:$('#recordSize').value});
+ try{
+ const response=await fetch('/api/charging-records?'+query,{headers:{Authorization:'Bearer '+TOKEN}});
+ const data=await response.json();if(request!==recordRequest)return;
+ if(!response.ok)throw new Error(data.error||'记录读取失败');
+ recordPage=data.page;recordPages=data.pages;const tb=$('#txTable tbody');tb.replaceChildren();
+ if(!data.records.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=15;cell.className='empty';cell.textContent='没有符合条件的记录';row.appendChild(cell);tb.appendChild(row);}
+ else for(const record of data.records)tb.appendChild(recordRow(record));
+ $('#recordSummary').textContent=`符合条件 ${data.total} 条 · 最终账单电量 ${Number(data.summary.final_energy).toFixed(4)} kWh · 最终账单金额 ${Number(data.summary.final_amount).toFixed(4)} 元（不含进行中估算，未代表支付到账）`;
+ $('#recordPage').textContent=`第 ${recordPage} / ${recordPages} 页`;$('#recordPrev').disabled=recordPage<=1;$('#recordNext').disabled=recordPage>=recordPages;$('#recordError').textContent='';
+ }catch(error){if(request===recordRequest)$('#recordError').textContent='读取失败：'+error.message;}
+}
+function addTx(d){clearTimeout(recordTimer);recordTimer=setTimeout(initTx,500);refreshStats();}
+$('#recordFilters').onsubmit=e=>{e.preventDefault();recordFilters=Object.fromEntries(new FormData(e.target));recordPage=1;initTx();};
+$('#recordReset').onclick=()=>{$('#recordFilters').reset();recordFilters={};recordPage=1;initTx();};
+$('#recordRefresh').onclick=initTx;
+$('#recordPrev').onclick=()=>{if(recordPage>1){recordPage--;initTx();}};
+$('#recordNext').onclick=()=>{if(recordPage<recordPages){recordPage++;initTx();}};
+$('#recordSize').onchange=()=>{recordPage=1;initTx();};
+setInterval(()=>{if(TOKEN&&!document.hidden&&$('#page-orders').classList.contains('on'))initTx();},15000);
+
+/* ---------- API ---------- */
+async function api(path, body, method){
+  const opt=body?{method:method||"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{};
+  if(TOKEN) opt.headers=Object.assign({"Authorization":"Bearer "+TOKEN},opt.headers||{});
+  const r=await fetch(path+qs(),opt); return r.json();
+}
+function openStart(no){ $("#sPile").textContent=no; $("#startMask").classList.add("on"); }
+function openStop(no){ $("#pPile").textContent=no; $("#stopMask").classList.add("on"); }
+$("#sCancel").onclick=()=>$("#startMask").classList.remove("on");
+$("#pCancel").onclick=()=>$("#stopMask").classList.remove("on");
+$("#sOk").onclick=async()=>{
+  const no=$("#sPile").textContent;
+  $("#startMask").classList.remove("on");
+  logline("l-info",`[${new Date().toLocaleTimeString()}] 对桩 ${no} 枪${$("#sGun").value} 下发远程启机(0x34)…`);
+  toast("启机指令已下发，等待充电桩回复(最长80s)…");
+  try{
+    const res=await api(`/api/piles/${no}/start`,{gun_no:+$("#sGun").value,
+      logic_card_no:$("#sLogic").value, phys_card_no:$("#sPhys").value, balance:+$("#sBalance").value});
+    if(res.ok){ logline("l-ok",`桩 ${no} 启动成功 ✔ ${JSON.stringify(res.reply)}`); toast("✔ 启动成功"); }
+    else{ logline("l-err",`桩 ${no} 启动失败: ${res.error||JSON.stringify(res.reply)}`); toast("✘ "+(res.error||"启动失败"),false); }
+  }catch(e){ toast("请求失败: "+e,false); }
+};
+$("#pOk").onclick=async()=>{
+  const no=$("#pPile").textContent;
+  $("#stopMask").classList.remove("on");
+  logline("l-info",`[${new Date().toLocaleTimeString()}] 对桩 ${no} 枪${$("#pGun").value} 下发远程停机(0x36)…`);
+  try{
+    const res=await api(`/api/piles/${no}/stop`,{gun_no:+$("#pGun").value});
+    if(res.ok){ logline("l-ok",`桩 ${no} 停机成功 ✔`); toast("✔ 停机成功"); }
+    else{ logline("l-err",`桩 ${no} 停机失败: ${res.error||JSON.stringify(res.reply)}`); toast("✘ "+(res.error||"停机失败"),false); }
+  }catch(e){ toast("请求失败: "+e,false); }
+};
+const CMD_NAME={sync_time:"对时",read_realtime:"召唤实时数据",billing_model:"下发费率",
+                work_params:"工作参数",reboot:"远程重启"};
+const ST_TEXT2={0:"离线",1:"故障",2:"空闲",3:"充电中"};
+function fmtCmdReply(cmd,d){
+  if(cmd==="sync_time") return `对时成功，桩当前时间 ${d.current_time||"--"}`;
+  if(cmd==="read_realtime")
+    return `实时数据: ${(d.out_voltage/10).toFixed(1)}V / ${(d.out_current/10).toFixed(1)}A / `+
+           `${((d.out_voltage/10)*(d.out_current/10)/1000).toFixed(2)}kW / SOC ${d.soc??"--"}% / ${ST_TEXT2[d.status]??d.status}`;
+  const r=d.result, okTxt=r===1?"成功":(r===0?"失败":`结果码${r}`);
+  if(cmd==="billing_model") return `费率下发${okTxt}`;
+  if(cmd==="work_params")   return `工作参数设置${okTxt}`;
+  if(cmd==="reboot")        return `重启指令已被桩接受`;
+  return JSON.stringify(d);
+}
+async function apiCmd(no,cmd,extra={}){
+  const cname=CMD_NAME[cmd]||cmd;
+  logline("l-info",`[${new Date().toLocaleTimeString()}] 对桩 ${no} 下发${cname}…`);
+  try{
+    const res=await api(`/api/piles/${no}/cmd`,Object.assign({cmd},extra));
+    if(res.ok){
+      const msg=res.reply?fmtCmdReply(cmd,res.reply):`${cname}已下发`;
+      logline("l-ok",`桩 ${no} ${cname}: ${msg}`);
+      toast("✔ "+msg);
+    }else{
+      logline("l-err",`桩 ${no} ${cname}失败: ${res.error}`);
+      toast("✘ "+res.error,false);
+    }
+  }catch(e){ toast("请求失败: "+e,false); }
+}
+
+/* ---------- WebSocket ---------- */
+function applySnapshot(list){
+  for(const p of list){
+    const c=ensureRow(p.pile_no);
+    c.row.querySelector(".addr").textContent=p.client;
+    c.row.querySelector(".ct").textContent=(p.connected_at||"").replace("T"," ").slice(0,19);
+    c.dev.querySelector(".dsub").textContent=`${p.client} · 接入于 ${p.connected_at}`;
+    for(const g in p.latest) updateRow(p.pile_no,p.latest[g]);
+  }
+}
+function onFrame(m){
+  const d=m.data||{}, no=m.pile_no||d.pile_no;
+  appendPlain(m);
+  const arrow=m.dir==="down"?">>":"<<";
+  logline(m.dir==="down"?"l-down":"l-up",
+    `[${m.time}] ${arrow} ${m.name||("0x"+m.ftype.toString(16))} 桩[${no||"--"}] ${JSON.stringify(d)}`);
+  if(!no) return;
+  if(piles[no]){ piles[no].lastSeen=Date.now(); piles[no].offlineMarked=false;
+                 refreshStationChip(no); }
+  if(m.ftype===0x03){ piles[no]&&(piles[no].gunHealth[d.gun_no||"01"]=d.gun_status); if(piles[no]) updateRow(no,piles[no].latest[d.gun_no||"01"]||{gun_no:d.gun_no||"01",status:2,out_voltage:0,out_current:0,energy:0,amount:0}); }
+  if(m.ftype===0x13&&d.pile_no) updateRow(d.pile_no,d);
+  if(m.ftype===0x3B&&d.pile_no) addTx(d);
+  if(m.ftype===0x33) toast(d.start_result==1?`桩[${no}] 0x33回复: 启动成功`:`桩[${no}] 0x33回复: 启动失败(原因${d.fail_reason})`,d.start_result==1);
+  if(m.ftype===0x35) toast(d.stop_result==1?`桩[${no}] 0x35回复: 停机成功`:`桩[${no}] 0x35回复: 停机失败(原因${d.fail_reason})`,d.stop_result==1);
+}
+function connectWS(){
+  const proto=location.protocol==="https:"?"wss://":"ws://";
+  const ws=new WebSocket(proto+location.host+"/ws"+qs());
+  ws.onopen=()=>{ $("#wsDot").className="dot on"; $("#wsText").textContent="已连接"; };
+  ws.onclose=()=>{ $("#wsDot").className="dot off"; $("#wsText").textContent="断开,5s重连"; setTimeout(connectWS,5000); };
+  ws.onmessage=ev=>{
+    let m; try{m=JSON.parse(ev.data);}catch{return;}
+    if(m.type==="snapshot"){
+      applySnapshot(m.piles);
+      logline("l-info",`[${new Date().toLocaleTimeString()}] 快照同步：在线桩 ${m.piles.length} 台`);
+    }else if(m.type==="frame"){ onFrame(m); }
+    else if(m.type==="fault"){
+      logline("l-err",`[${m.time}] 🚨 新故障: ${m.fault.fault_type} 桩[${m.fault.pile_no}]枪${m.fault.gun_no} ${m.fault.detail||""}`);
+      toast(`🚨 新故障：${m.fault.fault_type}（桩 ${m.fault.pile_no}）`,false);
+      fetchFaults();
+    }
+    else if(m.type==="fault_update"){ fetchFaults(); }
+    else if(m.type==="offline"){
+      logline("l-warn",`[${m.time}] 桩[${m.pile_no}] 离线`);
+      markOffline(m.pile_no);
+      updateStats();
+    }
+  };
+}
+/* ---------- 登录控制 ---------- */
+async function doLogin(){
+  const user=$("#lgUser").value.trim(), pwd=$("#lgPwd").value;
+  if(!user||!pwd){ $("#lgErr").textContent="请输入用户名和密码"; return; }
+  $("#lgBtn").disabled=true; $("#lgErr").textContent="登录中…";
+  try{
+    const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({username:user,password:pwd})});
+    const d=await r.json();
+    if(d.ok){
+      TOKEN=d.token; sessionStorage.setItem("ykc_token",d.token);
+      $("#loginMask").style.display="none";
+      logline("l-info",`[${new Date().toLocaleTimeString()}] 管理员 ${d.name} 登录成功`);
+      toast(`欢迎，${d.name}`);
+      refreshStats(); fetchStations(); fetchFaults(); initLogs(); initTx();
+      connectWS(); startWatchdog();
+    }else{
+      $("#lgErr").textContent=d.error||"登录失败"; $("#lgBtn").disabled=false;
+    }
+  }catch(e){ $("#lgErr").textContent="网络错误: "+e; $("#lgBtn").disabled=false; }
+}
+$("#lgBtn").onclick=doLogin;
+$("#lgPwd").addEventListener("keydown",e=>{ if(e.key==="Enter") doLogin(); });
+$("#lgUser").addEventListener("keydown",e=>{ if(e.key==="Enter") doLogin(); });
+$("#btnLogout").onclick=async()=>{
+  try{ await fetch("/api/logout",{method:"POST",headers:{"Authorization":"Bearer "+TOKEN}}); }catch{}
+  sessionStorage.removeItem("ykc_token"); location.reload();
+};
+/* 已登录(会话有效)则直接进入；否则显示登录页 */
+if(TOKEN){
+  fetch("/api/piles"+qs()).then(async r=>{
+    if(r.status===401){ sessionStorage.removeItem("ykc_token"); TOKEN=""; $("#loginMask").style.display="flex"; }
+    else{ $("#loginMask").style.display="none"; applySnapshot((await r.json()).piles);
+           refreshStats(); fetchStations(); fetchFaults(); initLogs(); initTx(); connectWS(); startWatchdog(); }
+  }).catch(()=>{ $("#loginMask").style.display="flex"; });
+}else{
+  $("#loginMask").style.display="flex";
+}
+/* ---------- 报文日志：启动/刷新时从服务器日志文件同步 ---------- */
+function logClass(line){
+  if(line.includes("[ERROR]")) return "l-err";
+  if(line.includes("[WARNING]")) return "l-warn";
+  if(line.includes("<<")) return "l-up";
+  if(line.includes(">>")) return "l-down";
+  return "l-info";
+}
+async function initLogs(){
+  try{
+    const r=await api("/api/logs?limit=300");
+    const el=$("#log"); el.innerHTML="";
+    for(const line of (r.lines||[])){
+      const d=document.createElement("div");
+      d.className=logClass(line); d.textContent=line;
+      el.appendChild(d);
+    }
+    while(el.children.length>400) el.removeChild(el.firstChild);
+    el.scrollTop=el.scrollHeight;
+    if((r.lines||[]).length)
+      logline("l-info",`[${new Date().toLocaleTimeString()}] 已从服务器日志文件同步 ${r.lines.length} 行历史记录`);
+  }catch(e){}
+}
+
+/* ---------- 日志下载 / 清空（备份→确认 两步） ---------- */
+function downloadLog(){
+  const a=document.createElement("a");
+  a.href="/api/logs/download"+qs();
+  a.download="ykc_server.log";
+  document.body.appendChild(a); a.click(); a.remove();
+  logline("l-info",`[${new Date().toLocaleTimeString()}] 日志文件下载中…`);
+}
+function askClearLog(){ $("#backupMask").classList.add("on"); }
+function backupGo(){ downloadLog(); $("#backupMask").classList.remove("on"); }
+function backupDone(){
+  $("#backupMask").classList.remove("on");
+  $("#clearMask").classList.add("on");     // 已备份 → 弹出最终确认
+}
+$("#clearOk").onclick=async()=>{
+  $("#clearMask").classList.remove("on");
+  try{
+    const res=await api("/api/logs/clear",{});
+    if(res.ok){
+      $("#log").innerHTML="";
+      logline("l-ok",`[${new Date().toLocaleTimeString()}] 服务器日志文件已清空`);
+      toast("✔ 日志文件已清空");
+    }else toast("清空失败: "+(res.error||"未知错误"),false);
+  }catch(e){ toast("请求失败: "+e,false); }
+};
+
+/* ---------- 站点桩芯片实时状态刷新 ---------- */
+function refreshStationChip(no){
+  const el=document.getElementById("chip-"+no);
+  if(!el) return;
+  const c=piles[no];
+  if(!c||c.offlineMarked){
+    el.className="tag t-gray"; el.textContent=`🔌${no}（离线）`; return;
+  }
+  const g=Object.keys(c.latest)[0];
+  const st=g!==undefined?c.latest[g].status:2;
+  const cls=st===3?"t-green":(st===1?"t-red":"t-blue");
+  el.className="tag "+cls;
+  el.textContent=`🔌${no}（${ST_TEXT[st]||st}）`;
+}
+
+/* ---------- 设备监控筛选（电站/桩号/状态） ---------- */
+function applyDevFilter(){
+  const st=$("#devStationFilter").value,
+        q=$("#devSearch").value.trim().toUpperCase(),
+        sf=$("#devStatusFilter").value;
+  let shown=0, total=0;
+  for(const no in piles){
+    const c=piles[no]; total++;
+    let ok=true;
+    if(st==="__none__"){ if(stationMap[no]) ok=false; }
+    else if(st && stationMap[no]!==st) ok=false;
+    if(ok && q && !no.toUpperCase().includes(q)) ok=false;
+    if(ok && sf){
+      if(sf==="off"){ if(!c.offlineMarked) ok=false; }
+      else{
+        const g=Object.keys(c.latest)[0];
+        const cur=c.offlineMarked?"off":(g!==undefined?String(c.latest[g].status):"");
+        if(cur!==sf) ok=false;
+      }
+    }
+    c.dev.style.display=ok?"":"none";
+    if(ok) shown++;
+  }
+  $("#devCount").textContent=`显示 ${shown}/${total} 台`;
+}
+
+/* ---------- 报文大白话解读 ---------- */
+const BATT_TYPE={1:"铅酸电池",2:"氢电池",3:"磷酸铁锂电池",4:"锰酸锂电池",5:"钴酸锂电池",6:"三元材料电池",7:"聚合物锂电池",8:"钛酸锂电池",255:"其他"};
+const STOP_REASON={0:"正常结束",64:"APP远程停止",65:"SOC达到100%",66:"电量满足设定",67:"金额满足设定",68:"时间满足设定",69:"手动停止",74:"启动失败-控制系统故障",255:"未知"};
+function translateFrame(m){
+  const d=m.data||{}, no=d.pile_no||m.pile_no||"--", gun=d.gun_no||"01";
+  const stTxt={0:"离线",1:"故障",2:"空闲",3:"充电中"}[d.status];
+  const arrow=m.dir==="down"?"平台 → 桩":"桩 → 平台";
+  switch(m.ftype){
+    case 0x01: return `${arrow} | 充电桩：${no} 请求登录（${d.pile_type===1?"交流桩":"直流桩"}，${d.gun_count}把枪，程序版本 ${d.prog_ver||"--"}）`;
+    case 0x02: return `${arrow} | 充电桩：${no} 登录${d.result===0?"成功":"失败"}`;
+    case 0x03: return `${arrow} | 充电桩：${no}，充电枪：${gun} 心跳，枪状态：${d.gun_status===1?"故障":"正常"}`;
+    case 0x04: return `${arrow} | 充电桩：${no}，充电枪：${gun} 心跳应答`;
+    case 0x05: return `${arrow} | 充电桩：${no} 校验计费模型（本地模型号 ${d.model_no||"--"}）`;
+    case 0x06: return `${arrow} | 充电桩：${no} 计费模型${d.result===0?"一致":"不一致"}（平台模型号 ${d.model_no||"--"}）`;
+    case 0x13: return `${arrow} | 充电桩：${no}，充电枪：${gun}，状态：${d.status} ${stTxt||""}`+
+      (d.status===3?`，输出 ${(d.out_voltage/10).toFixed(1)}V/${(d.out_current/10).toFixed(1)}A，SOC ${d.soc}%，已充 ${(d.energy/10000).toFixed(2)}度 / ${(d.amount/10000).toFixed(2)}元，时长 ${d.charge_time}分钟`:"");
+    case 0x15: return `${arrow} | 充电桩：${no}，充电枪：${gun} 车辆接入：VIN ${d.vin||"--"}，${BATT_TYPE[d.batt_type]||d.batt_type||"--"}，容量 ${((d.batt_capacity||0)/10).toFixed(1)}Ah，电压 ${((d.batt_total_vol||0)/10).toFixed(1)}V`;
+    case 0x17: return `${arrow} | 充电桩：${no}，充电枪：${gun} BMS参数：单体上限 ${((d.max_cell_vol||0)/100).toFixed(2)}V，电池能量 ${((d.batt_energy||0)/10).toFixed(1)}kWh，SOC ${((d.soc||0)/10).toFixed(1)}%`;
+    case 0x21: return `${arrow} | 充电桩：${no}，充电枪：${gun} 充电机中止充电（原因码 ${d.charger_stop_reason}，故障码 ${d.charger_stop_fault}，错误码 ${d.charger_stop_error}）`;
+    case 0x23: return `${arrow} | 充电桩：${no}，充电枪：${gun} BMS需求 ${((d.bms_vol_need||0)/10).toFixed(1)}V，输出 ${((d.out_vol||0)/10).toFixed(1)}V，SOC ${d.soc}%`;
+    case 0x25: return `${arrow} | 充电桩：${no}，充电枪：${gun} 电池温度 ${(d.min_temp||0)-50}~${(d.max_temp||0)-50}℃`;
+    case 0x33: return `${arrow} | 充电桩：${no}，充电枪：${gun} 远程启动${d.start_result===1?"成功":"失败"}${d.start_result===1?"":"（原因码 "+d.fail_reason+"）"}`;
+    case 0x35: return `${arrow} | 充电桩：${no}，充电枪：${gun} 远程停机${d.stop_result===1?"成功":"失败"}`;
+    case 0x3B: return `${arrow} | 充电桩：${no}，充电枪：${gun} 生成账单：${d.start_time||"--"} ~ ${d.end_time||"--"}，共 ${(d.total_energy/10000).toFixed(2)}度，合计 ${(d.total_amount/10000).toFixed(2)}元，VIN ${d.vin||"--"}，启动方式 ${{1:"APP",2:"刷卡",4:"离线卡",5:"VIN"}[d.trade_flag]||d.trade_flag}，停止原因 ${STOP_REASON[d.stop_reason]||d.stop_reason}`;
+    case 0x51: return `${arrow} | 充电桩：${no} 工作参数设置${d.result===1?"成功":"失败"}`;
+    case 0x55: return `${arrow} | 充电桩：${no} 对时完成，桩时间 ${d.current_time||"--"}`;
+    case 0x57: return `${arrow} | 充电桩：${no} 计费模型设置${d.result===1?"成功":"失败"}`;
+    case 0x91: return `${arrow} | 充电桩：${no} 重启指令${d.result===1?"已接受":"失败"}`;
+    case 0x34: return `${arrow} | 平台向充电桩：${no}，充电枪：${gun} 下发远程启机（余额 ${((d.balance||0)/100).toFixed(2)}元）`;
+    case 0x36: return `${arrow} | 平台向充电桩：${no}，充电枪：${gun} 下发远程停机`;
+    case 0x56: return `${arrow} | 平台向充电桩：${no} 下发对时（${d.current_time||"--"}）`;
+    case 0x58: return `${arrow} | 平台向充电桩：${no} 下发计费模型（模型号 ${d.model_no||"--"}）`;
+    case 0x12: return `${arrow} | 平台向充电桩：${no}，充电枪：${gun} 召唤实时数据`;
+    case 0x52: return `${arrow} | 平台向充电桩：${no} 设置工作参数（${d.work_enable===1?"停用":"允许"}，功率上限 ${d.max_power}%）`;
+    case 0x92: return `${arrow} | 平台向充电桩：${no} 下发${d.ctrl===1?"立即":"空闲时"}重启`;
+    default: return `${arrow} | ${m.name||("0x"+m.ftype.toString(16))} 充电桩：${no}${d.gun_no?("，充电枪："+gun):""} ${JSON.stringify(d)}`;
+  }
+}
+const plainBuf=[];   // {no,time,text} 缓冲，支持按桩筛选
+function appendPlain(m){
+  const no=(m.data&&m.data.pile_no)||m.pile_no||"--";
+  plainBuf.push({no, time:m.time, text:translateFrame(m)});
+  while(plainBuf.length>300) plainBuf.shift();
+  // 动态补充下拉选项
+  const sel=$("#plainFilter");
+  if(no!=="--" && ![...sel.options].some(o=>o.value===no)){
+    const opt=document.createElement("option");
+    opt.value=no; opt.textContent="桩 "+no;
+    sel.appendChild(opt);
+  }
+  renderPlain();
+}
+function renderPlain(){
+  const el=$("#plainLog"); if(!el) return;
+  const f=$("#plainFilter").value;
+  el.innerHTML="";
+  for(const it of plainBuf){
+    if(f && it.no!==f) continue;
+    const d=document.createElement("div");
+    d.textContent=`[${it.time}] ${it.text}`;
+    el.appendChild(d);
+  }
+  while(el.children.length>120) el.removeChild(el.firstChild);
+  el.scrollTop=el.scrollHeight;
+}
+
+/* ---------- 故障管理 ---------- */
+const FAULT_ST={active:["未处理","t-red"],dispatched:["已派发","t-orange"],resolved:["已处理","t-green"]};
+async function fetchFaults(){
+  try{
+    const r=await api("/api/faults");
+    renderFaults(r.active||[], r.history||[]);
+  }catch(e){}
+}
+function renderFaults(active, history){
+  const atb=$("#activeFaultTable tbody");
+  if(!active.length) atb.innerHTML='<tr><td colspan="7" class="empty">暂无现存故障 🎉</td></tr>';
+  else{
+    atb.innerHTML="";
+    for(const f of active){
+      const st=FAULT_ST[f.status]||[f.status,"t-gray"];
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td><b>${f.fault_type}</b></td><td>${f.pile_no}</td><td>${f.gun_no}</td>
+        <td style="white-space:normal;min-width:160px">${f.detail||"--"}</td>
+        <td>${f.occur_time||"--"}</td>
+        <td><span class="tag ${st[1]}">${st[0]}</span></td>
+        <td><div class="op-btns">
+          <button class="primary" onclick="openDispatch('${f.id}','${f.pile_no} ${f.fault_type}')">📨 派发工单</button>
+          <button onclick="resolveFault('${f.id}')">✔ 处理完成</button>
+        </div></td>`;
+      atb.appendChild(tr);
+    }
+  }
+  $("#faultStat").textContent=`共 ${active.length} 条`;
+  const htb=$("#historyFaultTable tbody");
+  if(!history.length) htb.innerHTML='<tr><td colspan="9" class="empty">暂无历史故障</td></tr>';
+  else{
+    htb.innerHTML="";
+    for(const f of history){
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td><b>${f.fault_type}</b></td><td>${f.pile_no}</td><td>${f.gun_no}</td>
+        <td style="white-space:normal;min-width:160px">${f.detail||"--"}</td>
+        <td>${f.occur_time||"--"}</td><td>${f.resolve_time||"--"}</td>
+        <td>${f.handler||"--"}</td><td>${(f.order&&f.order.person)||"--"}</td>
+        <td><span class="tag t-green">已处理</span></td>`;
+      htb.appendChild(tr);
+    }
+  }
+  $("#histStat").textContent=`共 ${history.length} 条`;
+}
+let dispatchId=null;
+function openDispatch(id,label){
+  dispatchId=id;
+  $("#dpFault").textContent=label;
+  $("#dpPerson").value=""; $("#dpNote").value="";
+  $("#dispatchMask").classList.add("on");
+}
+$("#dpOk").onclick=async()=>{
+  const person=$("#dpPerson").value.trim();
+  if(!person){ toast("请填写处理人员",false); return; }
+  $("#dispatchMask").classList.remove("on");
+  try{
+    const res=await api(`/api/faults/${dispatchId}/dispatch`,{person,note:$("#dpNote").value.trim()});
+    if(res.ok){ toast(`工单已派发给 ${person} ✔`); logline("l-ok",`故障工单已派发: ${person}`);
+                fetchFaults(); }
+    else toast("派发失败: "+res.error,false);
+  }catch(e){ toast("请求失败: "+e,false); }
+};
+async function resolveFault(id){
+  const handler=prompt("请输入处理完成人员姓名：","");
+  if(handler===null) return;
+  try{
+    const res=await api(`/api/faults/${id}/resolve`,{handler:handler.trim()});
+    if(res.ok){ toast("✔ 故障已处理完成并归档"); logline("l-ok",`故障处理完成(${handler})，已转入历史`);
+                fetchFaults(); }
+    else toast("操作失败: "+res.error,false);
+  }catch(e){ toast("请求失败: "+e,false); }
+}
+
+/* ---------- 充电数据：筛选刷新 + 双图表 ---------- */
+let curDay="today", curStation="";
+function setDay(btn){
+  document.querySelectorAll(".daybtn").forEach(b=>b.classList.toggle("on",b===btn));
+  curDay=btn.dataset.day; refreshStats();
+}
+function statStationChange(){ curStation=$("#statStation").value; refreshStats(); }
+function drawLineChart(cv, labels, series){
+  const ctx=cv.getContext("2d"), W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  const n=labels.length; if(n<2) return;
+  const padL=10,padR=10,padT=14,padB=28, iw=W-padL-padR, ih=H-padT-padB;
+  ctx.strokeStyle="#eef0f4"; ctx.fillStyle="#8a919f"; ctx.font="10px sans-serif";
+  for(let g=0;g<=4;g++){ const y=padT+ih*g/4;
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); }
+  const step=Math.ceil(n/8); ctx.textAlign="center";
+  ctx.fillStyle="#5a6472"; ctx.font="11px sans-serif";
+  for(let i=0;i<n;i+=step){ ctx.fillText(labels[i], padL+iw*i/(n-1), H-7); }
+  // 首末标签强制显示，防止两端时间信息丢失
+  if((n-1)%step!==0){ ctx.fillText(labels[n-1], padL+iw, H-7); }
+  ctx.fillStyle="#8a919f"; ctx.font="10px sans-serif";
+  for(const s of series){
+    const max=Math.max(...s.data,1e-9);
+    ctx.strokeStyle=s.color; ctx.lineWidth=1.6; ctx.beginPath();
+    s.data.forEach((v,i)=>{ const x=padL+iw*i/(n-1), y=padT+ih-(v/max)*ih;
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.stroke();
+    ctx.fillStyle=s.color;
+    s.data.forEach((v,i)=>{ const x=padL+iw*i/(n-1), y=padT+ih-(v/max)*ih;
+      ctx.beginPath(); ctx.arc(x,y,2,0,7); ctx.fill(); });
+  }
+  ctx.textAlign="left";
+}
+async function refreshStats(){
+  try{
+    const sp=new URLSearchParams();
+    if(curStation) sp.set("station",curStation);
+    if(curDay) sp.set("day",curDay);
+    const qs0=sp.toString();
+    const r=await api("/api/stats"+(qs0?"?"+qs0:""));
+    $("#cdEnergy").textContent=r.tx_energy.toFixed(4);
+    $("#cdCount").textContent=r.tx_count;
+    $("#cdAmount").textContent=r.tx_amount.toFixed(4);
+    $("#cdElec").textContent=r.elec_amount.toFixed(4);
+    $("#cdSvc").textContent=r.svc_amount.toFixed(4);
+    txCount=r.tx_count; txAmount=r.tx_amount;
+    const t=await api("/api/stats/trend?days=30"+(curStation?"&station="+encodeURIComponent(curStation):""));
+    drawLineChart($("#trendChart"), t.days.map(x=>x.date), [
+      {name:"充电电量",color:"#00b42a",data:t.days.map(x=>x.energy)},
+      {name:"充电次数",color:"#ff7d00",data:t.days.map(x=>x.count)},
+      {name:"订单金额",color:"#1677ff",data:t.days.map(x=>x.amount)}]);
+    const h=await api("/api/stats/hourly"+(curStation?"?station="+encodeURIComponent(curStation):""));
+    drawLineChart($("#hourChart"), h.hours.map(x=>x.hour), [
+      {name:"充电电量",color:"#00b42a",data:h.hours.map(x=>x.energy)},
+      {name:"充电次数",color:"#ff7d00",data:h.hours.map(x=>x.count)},
+      {name:"订单金额",color:"#1677ff",data:h.hours.map(x=>x.amount)}]);
+  }catch(e){}
+}
+
+/* ---------- 充电站管理 ---------- */
+let stationMap={};   // pile_no -> 站点名
+let stationData=[];
+async function fetchStations(){
+  try{
+    const r=await api("/api/stations");
+    stationData=r.stations||[];
+    stationMap={};
+    for(const st of stationData)
+      for(const p of st.piles||[]) stationMap[p.pile_no]=st.name;
+    const sel=$("#statStation"), cur=sel.value;
+    sel.innerHTML='<option value="">全部电站</option>'+
+      stationData.map(st=>`<option value="${st.name}">${st.name}</option>`).join("");
+    sel.value=cur;
+    const dsel=$("#devStationFilter"), dcur=dsel.value;
+    dsel.innerHTML=sel.innerHTML+'<option value="__none__">其他（未归属电站）</option>';
+    dsel.value=dcur;
+    renderStations();
+    for(const no in piles) refreshStationChip(no);
+    applyDevFilter();
+    for(const no in piles){
+      piles[no].row.querySelector(".station").innerHTML=
+        `<span class="tag ${stationMap[no]?"t-violet":"t-gray"}">${stationMap[no]||"未分组"}</span>`;
+    }
+    // 站点内已添加的桩：离线也要在设备监控中显示卡片与离线状态
+    for(const st of stationData){
+      for(const p of st.piles||[]){
+        ensureRow(p.pile_no);
+        if(!p.online) markOffline(p.pile_no);
+        else if(p.latest) for(const g in p.latest) updateRow(p.pile_no, p.latest[g]);
+      }
+    }
+    updateStats();
+  }catch(e){}
+}
+function renderStations(){
+  const box=$("#stationList");
+  if(!stationData.length){ box.innerHTML='<div class="empty">暂无充电站，点击右上角"新建充电站"</div>'; return; }
+  box.innerHTML="";
+  for(const st of stationData){
+    const div=document.createElement("div");
+    div.style.cssText="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px";
+    const chips=(st.piles||[]).map(p=>
+      `<span class="tag ${p.online?"t-green":"t-gray"}" id="chip-${p.pile_no}" style="margin:2px 4px 2px 0">🔌${p.pile_no}${p.online?"":"（离线）"}</span>`).join("")
+      ||'<span style="color:var(--dim);font-size:12px">尚未绑定充电桩</span>';
+    div.innerHTML=`
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <b style="font-size:15px">${st.name}</b>
+        <span class="tag t-blue">${st.online_count||0}/${(st.piles||[]).length} 在线</span>
+        <span style="margin-left:auto" class="op-btns">
+          <button onclick="openStationModal('${st.id}')">编辑</button>
+          <button class="danger" onclick="delStation('${st.id}','${st.name}')">删除</button>
+        </span>
+      </div>
+      <div style="color:var(--dim);font-size:12px;margin-bottom:8px">${st.address||""}</div>
+      <div>${chips}</div>`;
+    box.appendChild(div);
+  }
+}
+let editStationId=null;
+function openStationModal(id){
+  editStationId=id||null;
+  const st=id?stationData.find(x=>x.id===id):null;
+  $("#stTitle").textContent=st?`编辑充电站（${st.name}）`:"新建充电站";
+  $("#stName").value=st?st.name:"";
+  $("#stAddr").value=st?(st.address||""):"";
+  $("#stPiles").value=st?(st.pile_nos||[]).join(", "):"";
+  $("#stationMask").classList.add("on");
+}
+$("#stOk").onclick=async()=>{
+  const body={name:$("#stName").value, address:$("#stAddr").value, pile_nos:$("#stPiles").value};
+  if(!body.name.trim()){ toast("站点名称不能为空",false); return; }
+  $("#stationMask").classList.remove("on");
+  try{
+    const res=editStationId
+      ? await api(`/api/stations/${editStationId}`, body, "PUT")
+      : await api("/api/stations", body);
+    if(res.ok){ toast(`站点已保存 ✔`); logline("l-ok",`充电站[${body.name}]已保存`); fetchStations(); }
+    else toast("保存失败: "+res.error, false);
+  }catch(e){ toast("请求失败: "+e,false); }
+};
+async function delStation(id,name){
+  if(!confirm(`确定删除充电站「${name}」？（桩不会被删除，仅解除站点归属）`)) return;
+  try{
+    const r=await fetch(`/api/stations/${id}`+qs(),{method:"DELETE",headers:{"Authorization":"Bearer "+TOKEN}});
+    const d=await r.json();
+    if(d.ok){ toast("站点已删除"); logline("l-warn",`充电站[${name}]已删除`); fetchStations(); }
+    else toast("删除失败: "+d.error,false);
+  }catch(e){ toast("请求失败: "+e,false); }
+}
+
+/* ---------- 客户端看门狗：65s 无数据标记离线（与服务端90s双保险） ---------- */
+function startWatchdog(){
+  setInterval(()=>{
+    const now=Date.now();
+    for(const no in piles){
+      if(!piles[no].offlineMarked && now-piles[no].lastSeen>65000){
+        logline("l-warn",`[${new Date().toLocaleTimeString()}] 桩[${no}] 65秒无数据，标记离线`);
+        markOffline(no); updateStats();
+      }
+    }
+  },5000);
+}
+
+/* 轮询兜底 */
+setInterval(async()=>{
+  if($("#wsDot").className.includes("on")) return;
+  try{ const r=await api("/api/piles"); applySnapshot(r.piles); }catch{}
+},5000);
+</script>
+</body>
+</html>

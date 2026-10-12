@@ -37,7 +37,7 @@
 
 1. 备份 `/root/ykc_platform_server.py`、`/root/charge.html` 和 `/root/customer_data/customers.sqlite3`（先停止写入再复制数据库）。
 2. 将仓库 `server/ykc_platform_server.py` 上传为 `/root/ykc_platform_server.py`；`customer/charge.html` 上传为 `/root/charge.html`。
-3. 原后台 `/root/index.html` 保留，不替换；customer_data、stations.json、transactions.json、faults.json保留。
+3. 本轮后台界面更新使用仓库server/index.html替换 `/root/index.html`；customer_data、stations.json、transactions.json、faults.json保留。
 4. 检查 `ss -ltnp '( sport = :8088 or sport = :8000 or sport = :8768 )'`，确认PID后停止旧客户服务和旧设备后台。若由supervisor/systemd管理，在原管理器停止，防止自动重启。不要停止宝塔Nginx。
 5. 启动一体化服务。保留原后台管理员账号密码和其他已有参数，示例如下（占位账号密码必须替换）：
 
@@ -66,10 +66,26 @@ tail -n 30 /root/ykc.out
 python -m unittest discover -s tests -v
 ```
 
-账号HTTP接口与模拟设备协议测试10项通过；前端JavaScript语法检查通过。未在实际手机浏览器和真实充电桩验证本版本。安全问题仅为当前约定的恢复方式。
+账号、设备协议及管理员记录接口共15项测试通过；前端JavaScript语法和DOM渲染检查通过。未在实际手机浏览器和真实充电桩验证本版本。安全问题仅为当前约定的恢复方式。
 
 原后台卡启动、并充、其他管理命令沿用旧实现；客户仅支持单枪远程启动/停止。不提供手工强制释放未知订单按钮，避免误认空闲或停止别人的充电。充电桩若未发送匹配流水号的交易记录，需要核查设备报文。
 
 ## 清空客户测试数据
 
 先停止一体化后台，再删除 `/root/customer_data/customers.sqlite3` 及同名 `-wal`、`-shm`、`-journal` 文件；重新启动会自动创建空库。此操作删除客户账号、会话、密保及客户订单，不删除后台 transactions.json、stations.json、faults.json。旧密保问题已移除，只保留新版8项。客户页面现名为 `customer/charge.html`，后台管理index.html不变。
+
+## 后台全部充电记录与筛选
+
+管理页面文件现在包含在仓库：server/index.html。客户页面继续是customer/charge.html。
+
+本轮部署更新两个文件：
+- server/ykc_platform_server.py → /root/ykc_platform_server.py
+- server/index.html → /root/index.html（这是后台，不是客户页面）
+
+先备份两个旧文件，在没有进行中充电时停止后台、替换文件、使用原命令重启。数据库自动增加归档表，不需要删除数据库；保留customer_data以及transactions.json。后台8000登录后进入“充电记录”，支持桩号、枪号、客户账号、流水号、状态、来源、日期筛选和20/50/100条分页。支持刷新、重置，页面打开时每15秒同步；交易上报也触发刷新。
+
+列表包含所有保留的客户订单和设备最终账单，按匹配流水合并去重。刷卡及后台启机等无客户订单账单标为“未关联用户”；关联客户订单显示真实注册账号。进行中金额标为实时，汇总只计最终账单，不代表收款。
+
+新收到的设备账单永久保留在customers.sqlite3中的transaction_archive表（除非主动清空数据库），启动导入transactions.json现有历史以及已有客户订单最终账单。旧JSON曾经超过5000条而已被截断的数据无法凭空恢复。
+
+15项自动化测试通过；管理员脚本语法与DOM渲染冒烟检查通过。仍需服务器实际浏览器确认样式和设备账单联调。

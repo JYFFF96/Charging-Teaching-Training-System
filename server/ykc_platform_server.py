@@ -1220,6 +1220,13 @@ def make_api_handler(token, credentials=None):
             if p == "/api/piles":
                 return self._json({"piles": piles_snapshot(), "time": _now_str(),
                                    "billing_model": CFG.billing_model_no})
+            if p == "/api/charging-records":
+                if not CUSTOMER_APP:
+                    return self._json({"error": "客户数据库未启用"}, 503)
+                try:
+                    return self._json(CUSTOMER_APP.admin_records(self.path))
+                except ApiError as e:
+                    return self._json({"error": e.message}, e.status)
             if p == "/api/transactions":
                 return self._json({"transactions": STORE.all_transactions()})
             if p == "/api/stats":
@@ -1884,10 +1891,101 @@ class ChargingApp(CustomerAccounts):
                 id TEXT PRIMARY KEY,user_id INTEGER NOT NULL,pile_no TEXT NOT NULL,gun_no INTEGER NOT NULL,
                 serial_no TEXT UNIQUE NOT NULL,status TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL,
                 note TEXT NOT NULL DEFAULT '',transaction_json TEXT);
+            CREATE TABLE IF NOT EXISTS transaction_archive(
+                serial_no TEXT NOT NULL,pile_no TEXT NOT NULL,gun_no INTEGER NOT NULL,payload TEXT NOT NULL,
+                start_time TEXT NOT NULL,end_time TEXT NOT NULL,energy_raw INTEGER NOT NULL,
+                amount_raw INTEGER NOT NULL,received REAL NOT NULL,
+                PRIMARY KEY(serial_no,pile_no,gun_no));
+            CREATE INDEX IF NOT EXISTS archive_time ON transaction_archive(start_time);
             CREATE UNIQUE INDEX IF NOT EXISTS occupied_gun ON orders(pile_no,gun_no)
                 WHERE status IN ('starting','charging','stopping','unknown','ending');
             ''')
             c.execute("UPDATE orders SET status='unknown',note='服务重启，等待设备报文核实' WHERE status IN ('starting','stopping')")
+        with self.connect() as c:
+            history=STORE.all_transactions()
+            for row in c.execute('SELECT transaction_json FROM orders WHERE transaction_json IS NOT NULL').fetchall():
+                try: history.append(json.loads(row['transaction_json']))
+                except (ValueError,TypeError): pass
+            for transaction in history:
+                self._archive_write(c,transaction,False)
+    def _archive_write(self,c,d,replace=True):
+        if not isinstance(d,dict) or d.get('_truncated'): return
+        serial=str(d.get('serial_no') or '');pile=str(d.get('pile_no') or '')
+        try:
+            gun=int(d.get('gun_no',0));energy=int(d.get('total_energy',0));amount=int(d.get('total_amount',0))
+        except (ValueError,TypeError): return
+        if not serial or not pile or not 1<=gun<=99: return
+        conflict='''DO UPDATE SET payload=excluded.payload,start_time=excluded.start_time,end_time=excluded.end_time,
+                    energy_raw=excluded.energy_raw,amount_raw=excluded.amount_raw''' if replace else 'DO NOTHING'
+        c.execute('''INSERT INTO transaction_archive
+            (serial_no,pile_no,gun_no,payload,start_time,end_time,energy_raw,amount_raw,received)
+            VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(serial_no,pile_no,gun_no) '''+conflict,
+            (serial,pile,gun,json.dumps(d,ensure_ascii=False),str(d.get('start_time') or ''),
+             str(d.get('end_time') or ''),energy,amount,time.time()))
+    def archive_transaction(self,d):
+        with self.connect() as c: self._archive_write(c,d)
+    def admin_records(self,raw):
+        q=parse_qs(urlsplit(raw).query)
+        value=lambda k: q.get(k,[''])[0].strip()
+        try:
+            page=max(1,int(value('page') or 1));size=max(1,min(100,int(value('page_size') or 50)))
+        except ValueError: raise ApiError(400,'分页参数无效')
+        terms=[];args=[]
+        for key,column in [('pile_no','pile_no'),('username','username'),('serial_no','serial_no')]:
+            needle=value(key)
+            if len(needle)>128: raise ApiError(400,'筛选内容过长')
+            if needle:
+                terms.append('instr(lower(coalesce('+column+",'')),lower(?))>0");args.append(needle)
+        if value('gun_no'):
+            if not re.fullmatch(r'\d{1,2}',value('gun_no')) or not 1<=int(value('gun_no'))<=99:
+                raise ApiError(400,'枪号需要1–99')
+            terms.append('gun_no=?');args.append(int(value('gun_no')))
+        for key,allowed in [('status',ACTIVE_STATES+('finished','failed')),('source',('customer','device'))]:
+            if value(key):
+                if value(key) not in allowed: raise ApiError(400,'状态或来源无效')
+                terms.append(key+'=?');args.append(value(key))
+        for key,operator in [('date_from','>='),('date_to','<=')]:
+            if value(key):
+                try:
+                    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value(key)): raise ValueError()
+                    datetime.strptime(value(key),'%Y-%m-%d')
+                except ValueError: raise ApiError(400,'日期格式无效')
+                terms.append('substr(record_time,1,10)'+operator+'?');args.append(value(key))
+        if value('date_from') and value('date_to') and value('date_from')>value('date_to'):
+            raise ApiError(400,'开始日期不能晚于结束日期')
+        union='''SELECT o.id AS order_id,o.user_id,u.username,o.pile_no,o.gun_no,o.serial_no,
+            o.status,'customer' AS source,o.created AS created_at,o.updated AS updated_at,o.note,
+            t.payload AS transaction_json,t.start_time,t.end_time,t.energy_raw,t.amount_raw,
+            CASE WHEN coalesce(t.start_time,'')<>'' THEN t.start_time ELSE datetime(o.created,'unixepoch','localtime') END AS record_time
+            FROM orders o LEFT JOIN users u ON u.id=o.user_id
+            LEFT JOIN transaction_archive t ON t.serial_no=o.serial_no AND t.pile_no=o.pile_no AND t.gun_no=o.gun_no
+            UNION ALL
+            SELECT NULL,NULL,NULL,t.pile_no,t.gun_no,t.serial_no,'finished','device',t.received,t.received,
+            '未关联客户账号',t.payload,t.start_time,t.end_time,t.energy_raw,t.amount_raw,
+            CASE WHEN t.start_time<>'' THEN t.start_time ELSE datetime(t.received,'unixepoch','localtime') END
+            FROM transaction_archive t WHERE NOT EXISTS
+            (SELECT 1 FROM orders o WHERE o.serial_no=t.serial_no AND o.pile_no=t.pile_no AND o.gun_no=t.gun_no)'''
+        where=' WHERE '+' AND '.join(terms) if terms else ''
+        base=' WITH records AS ('+union+') '
+        with self.connect() as c:
+            sums=c.execute(base+'SELECT count(*) AS total,coalesce(sum(energy_raw),0) AS energy,coalesce(sum(amount_raw),0) AS amount FROM records'+where,args).fetchone()
+            pages=max(1,(sums['total']+size-1)//size);page=min(page,pages)
+            rows=c.execute(base+'SELECT * FROM records'+where+' ORDER BY record_time DESC,created_at DESC,serial_no DESC LIMIT ? OFFSET ?',args+[size,(page-1)*size]).fetchall()
+        records=[]
+        for row in rows:
+            d=dict(row);tx=json.loads(d.pop('transaction_json')) if row['transaction_json'] else None
+            d['transaction']=tx
+            d['energy']=None if d.pop('energy_raw') is None else row['energy_raw']/10000
+            d['amount']=None if d.pop('amount_raw') is None else row['amount_raw']/10000
+            d['amount_final']=tx is not None
+            if not tx and row['source']=='customer' and row['status'] in ACTIVE_STATES:
+                _,latest,_=self.device(row['pile_no'],row['gun_no'])
+                if latest.get('serial_no')==row['serial_no']:
+                    d['energy']=latest.get('energy',0)/10000;d['amount']=latest.get('amount',0)/10000
+            records.append(d)
+        return {'records':records,'total':sums['total'],'page':page,'page_size':size,'pages':pages,
+                'summary':{'final_energy':sums['energy']/10000,'final_amount':sums['amount']/10000}}
+
     def active(self,pile,gun):
         with self.connect() as c:
             return c.execute("SELECT * FROM orders WHERE pile_no=? AND gun_no=? AND status IN ('starting','charging','stopping','unknown','ending')",(pile,gun)).fetchone()
@@ -2027,6 +2125,7 @@ class ChargingApp(CustomerAccounts):
                 c.execute("UPDATE orders SET status='ending',note='设备已空闲，等待最终交易记录',updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('charging','stopping','unknown')",(time.time(),serial,d.get('pile_no'),int(d.get('gun_no','0'))))
     def transaction(self,d):
         if d.get('_truncated'): raise ValueError('交易报文不完整，不能确认客户账单')
+        self.archive_transaction(d)
         with self.connect() as c:
             c.execute("UPDATE orders SET status='finished',note='设备交易已上报；未接支付扣款',transaction_json=?,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=?",
                       (json.dumps(d,ensure_ascii=False),time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))

@@ -27,3 +27,15 @@ availability: idle、mine、occupied、offline、fault、unknown。其他账号�
 错误码401未登录/验证失败、404订单不存在（含非本人订单）、409占用/设备状态不允许、429请求过多。订单操作每个账号最多30次/10分钟。启动最长等待80秒，停止20秒；客户端请求超时不代表命令失败，应重新查询订单，不能重复自动启动。
 
 支付尚未接入。客户接口不可用于直接授权扣款或余额校验。
+
+## 管理员充电记录（8000）
+
+GET /api/charging-records，使用原后台管理员Bearer Token鉴权；客户Cookie和客户Token没有访问权限。
+
+可选参数：pile_no（部分匹配）、gun_no（1–99精确匹配）、username（账号不区分大小写部分匹配）、serial_no（部分匹配）、status、source（customer/device）、date_from/date_to（YYYY-MM-DD，按开始/创建日期，包含当天）、page（默认1）、page_size（默认50，最大100）。
+
+返回records、total、page、pages、page_size和summary。summary为筛选范围的最终账单电量/金额，不包含未结束订单的实时估算；并非支付到账统计。列表进行中数据匹配实时流水，标注实时；最终账单覆盖实时估算。
+
+客户订单与transaction_archive按流水号、桩号、枪号合并，重复上报不会重复计数。未关联订单的桩账单单独显示，username为空。返回账号和订单信息，不包含密码、密保或会话凭证。
+
+启动自动从现存transactions.json和已保存客户订单账单导入历史；新账单归档在customers.sqlite3的transaction_archive表，不再受JSON最近5000条限制。已经被删除或截断且没有其他副本的历史无法恢复。清空整个customers.sqlite3会同时清空客户订单和该归档。
