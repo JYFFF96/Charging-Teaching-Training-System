@@ -1,24 +1,21 @@
-# 客户 API 约定（待后台实现）
+# 客户接口
 
-所有接口使用 HTTPS 和 JSON；除注册、登录、找回流程外，使用 `Authorization: Bearer <客户Token>`。客户 Token 不得具有管理权限。桩号和枪号不是身份凭证。
+页面与接口由同一个8088服务提供，浏览器使用HttpOnly会话Cookie，POST携带 `Content-Type: application/json`、`X-Customer-Request: 1` 和浏览器自动设置的同源Origin。正式访问使用HTTPS；不支持跨域接口调用。
 
-| 方法 | 路径 | 请求/用途 |
+| 方法 | 路径 | 状态与内容 |
 |---|---|---|
-| POST | /api/customer/register | username,password,security_question_id,security_answer；创建客户 |
-| POST | /api/customer/login | username,password；返回 token、expires_at、用户信息 |
-| POST | /api/customer/logout | 注销 Token |
-| POST | /api/customer/recovery/question | username；返回问题及短期 challenge_id |
-| POST | /api/customer/recovery/verify | challenge_id,security_answer；返回短期一次性 reset_token |
-| POST | /api/customer/recovery/reset | reset_token,new_password；重设密码并注销旧会话 |
-| GET | /api/customer/piles/{pile_no}/guns/{gun_no} | 在线、插枪、故障状态，实时数据及当前收费规则 |
-| POST | /api/customer/orders | pile_no,gun_no,idempotency_key；创建本人订单 |
-| POST | /api/customer/orders/{id}/start | 后台核验订单、支付/余额及设备状态后启动 |
-| POST | /api/customer/orders/{id}/stop | 停止本人订单，等待真实设备结果 |
-| GET | /api/customer/orders/{id} | 本人订单状态及实时信息 |
-| GET | /api/customer/orders | 分页返回本人历史及进行中订单 |
+| GET | /api/customer/config | 已实现，返回HTTP测试模式和充电演示标志 |
+| GET | /api/customer/me | 已实现，返回当前用户；未登录401 |
+| POST | /api/customer/register | 已实现，username,password,security_question_id,security_answer；创建并登录 |
+| POST | /api/customer/login | 已实现，username,password；登录并设置Cookie |
+| POST | /api/customer/logout | 已实现，注销当前会话 |
+| POST | /api/customer/recovery/verify | 已实现，username,security_question_id,security_answer；返回reset_token |
+| POST | /api/customer/recovery/reset | 已实现，reset_token,new_password；重置并注销所有旧会话 |
 
-密码和安全答案分别加盐哈希；不返回原密码或答案。限制登录和安全答案验证失败次数，对注册及恢复接口限流；找回密码避免暴露账号是否存在。重置令牌需过期、一次性消费且绑定账号。订单价格、余额、用户身份及权限均由后台计算验证，不能信任前端传值。
+账号4–32位字母数字下划线，大小写不敏感；密码8–128字符且区分大小写。问题ID为secret、character、memory。答案进行Unicode NFKC、两端去空格、大小写归一化；答案归一化后2–128字符。找回时由客户选择注册时的问题，后端不提供账号是否存在或该账号的问题查询。验证错误统一返回账号/问题/答案不匹配。
 
-订单状态建议：created、starting、charging、stopping、finished、failed、unknown。设备超时代表结果未知，不直接等同失败；重试需要幂等，并通过设备实时上报和交易记录核实。价格单位明确为元/kWh，金额使用整数分或十进制定点数。实时设备数据注明更新时间。
+单来源IP最多60次账号请求/10分钟；登录、恢复验证按账号及IP最多5次/10分钟，注册最多10次。超限429。登录成功清除该账号登录计数。重置凭证5分钟、一次性；会话24小时，存数据库可跨重启恢复。密码与答案不返回、不记录日志。
 
-原版 /api/login 和 /api/piles/... 是管理接口，本文件的客户接口尚未实现。
+## 尚未实现
+
+真实设备及订单接口、支付、用户与充电流水归属。充电演示仅存在当前页面内存，刷新清空，不会触发设备。后续需要后台验证费用、余额、订单归属、设备状态及幂等，并处理设备启停超时结果未知。客户不得调用原版管理接口。
