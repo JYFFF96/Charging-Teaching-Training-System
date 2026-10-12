@@ -22,7 +22,7 @@ availability: idle、mine、occupied、offline、fault、unknown。其他账号�
 
 单位: 实时energy/amount及最终total_energy/total_amount按报文值除10000，charge_time分钟。计费模型尖峰平谷电费和服务费除100000（元/kWh）。测试启动额度来自后台参数，单位分，与用户账户余额/充值无关，不接受前端余额输入。
 
-账号4–32位字母数字下划线，大小写不敏感；密码8–128字符。问题ID secret、character、memory。答案NFKC、去两端空白、大小写归一化，密码与答案独立加盐PBKDF2-SHA256。会话24小时，重置凭证5分钟且一次性。数据库包含原版账号表及新增orders表，保持旧账号与会话。
+账号4–32位字母数字下划线，大小写不敏感；密码8–128字符。问题ID movie、book、color、sport、disliked_food、first_phone_last4、respected_person、favorite_number。旧版 secret、character、memory 继续支持找回；新注册页面只显示新8项。安全答案允许1–128字符，支持单个数字或汉字。答案NFKC、去两端空白、大小写归一化，密码与答案独立加盐PBKDF2-SHA256。会话24小时，重置凭证5分钟且一次性。数据库包含原版账号表及新增orders表，保持旧账号与会话。
 
 错误码401未登录/验证失败、404订单不存在（含非本人订单）、409占用/设备状态不允许、429请求过多。订单操作每个账号最多30次/10分钟。启动最长等待80秒，停止20秒；客户端请求超时不代表命令失败，应重新查询订单，不能重复自动启动。
 

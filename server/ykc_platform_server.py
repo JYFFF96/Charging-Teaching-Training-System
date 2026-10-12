@@ -1674,7 +1674,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ITERATIONS = 600000
-QUESTIONS = ('secret', 'character', 'memory')
+QUESTIONS = ('movie', 'book', 'color', 'sport', 'disliked_food', 'first_phone_last4', 'respected_person', 'favorite_number', 'secret', 'character', 'memory')  # Legacy IDs retained for existing accounts
 
 def digest(value):
     salt = secrets.token_hex(16)
@@ -1853,8 +1853,8 @@ def handler_for(app):
             return pwd
         def answer(self,p):
             q,a=p.get('security_question_id'),p.get('security_answer')
-            if q not in QUESTIONS or not isinstance(a,str) or not 2<=len(answer_text(a))<=128:
-                raise ApiError(400,'请选择安全问题，答案长度需要2–128位')
+            if q not in QUESTIONS or not isinstance(a,str) or not 1<=len(answer_text(a))<=128:
+                raise ApiError(400,'请选择安全问题，答案长度需要1–128位')
             return q,answer_text(a)
         def reset(self,p):
             pwd=self.password(p.get('new_password'))

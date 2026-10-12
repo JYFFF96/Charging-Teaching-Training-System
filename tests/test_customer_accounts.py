@@ -53,6 +53,21 @@ class Accounts(unittest.TestCase):
             self.assertTrue(m.matches('new-password-456',row['password']))
             self.assertNotEqual(row['answer'],p['security_answer'])
             self.assertNotEqual(row['password'],reset['new_password'])
+    def test_new_questions_and_single_character_answers(self):
+        questions = ('movie','book','color','sport','disliked_food','first_phone_last4','respected_person','favorite_number')
+        for index, question in enumerate(questions):
+            answer = '1234' if question == 'first_phone_last4' else '7'
+            payload = {'username':'question_'+str(index),'password':'question-password',
+                       'security_question_id':question,'security_answer':answer}
+            self.assertEqual(self.request('/api/customer/register',payload)[0],201)
+            with self.app.connect() as c:
+                row=c.execute('SELECT * FROM users WHERE username=?',(payload['username'],)).fetchone()
+                self.assertEqual(row['question'],question)
+                self.assertTrue(m.matches(answer,row['answer']))
+        status,_,_=self.request('/api/customer/recovery/verify',
+            {'username':'question_7','security_question_id':'favorite_number','security_answer':'7'})
+        self.assertEqual(status,200)
+
     def test_origin_and_rate_limit(self):
         p={'username':'unknown','password':'bad-password'}
         self.assertEqual(self.request('/api/customer/login',p,origin=False)[0],403)
