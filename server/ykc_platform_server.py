@@ -1674,7 +1674,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ITERATIONS = 600000
-QUESTIONS = ('movie', 'book', 'color', 'sport', 'disliked_food', 'first_phone_last4', 'respected_person', 'favorite_number', 'secret', 'character', 'memory')  # Legacy IDs retained for existing accounts
+QUESTIONS = ('movie', 'book', 'color', 'sport', 'disliked_food', 'first_phone_last4', 'respected_person', 'favorite_number')
 
 def digest(value):
     salt = secrets.token_hex(16)

@@ -31,7 +31,7 @@ class Accounts(unittest.TestCase):
         r=c.getresponse();data=json.loads(r.read());status=r.status;newcookie=r.getheader('Set-Cookie','').split(';')[0];c.close()
         return status,data,newcookie
     def test_account_lifecycle_and_persistence(self):
-        p={'username':'Customer_1','password':'test-password-123','security_question_id':'secret','security_answer':'My special answer'}
+        p={'username':'Customer_1','password':'test-password-123','security_question_id':'movie','security_answer':'My special answer'}
         status,d,cookie=self.request('/api/customer/register',p);self.assertEqual(status,201)
         self.assertEqual(self.request('/api/customer/me',cookie=cookie)[1]['user']['username'],'customer_1')
         self.assertEqual(self.request('/api/customer/register',p)[0],409)

@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ITERATIONS = 600000
-QUESTIONS = ('movie', 'book', 'color', 'sport', 'disliked_food', 'first_phone_last4', 'respected_person', 'favorite_number', 'secret', 'character', 'memory')  # Legacy IDs retained for existing accounts
+QUESTIONS = ('movie', 'book', 'color', 'sport', 'disliked_food', 'first_phone_last4', 'respected_person', 'favorite_number')
 
 def digest(value):
     salt = secrets.token_hex(16)
@@ -207,7 +207,7 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument('--host',default='127.0.0.1')
     p.add_argument('--port',type=int,default=8088)
-    p.add_argument('--page',default=str(Path(__file__).resolve().parents[1]/'customer'/'index.html'))
+    p.add_argument('--page',default=str(Path(__file__).resolve().parents[1]/'customer'/'charge.html'))
     p.add_argument('--db',default=str(Path(__file__).resolve().parent/'customer_data'/'customers.sqlite3'))
     p.add_argument('--allow-insecure-test',action='store_true',help='仅虚构账号HTTP联调，正式部署不要使用')
     a=p.parse_args()
