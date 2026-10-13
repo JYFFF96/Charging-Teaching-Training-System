@@ -14,9 +14,6 @@ class Records(unittest.TestCase):
     # Separate fixture setup from the device command regression suite.
     def setUp(self):
         fixture.Charging.setUp(self)
-        with self.app.connect() as c:
-            c.execute("INSERT INTO users(id,username,password,question,answer) VALUES (1,'alice','unused','movie','unused')")
-            c.execute("INSERT INTO users(id,username,password,question,answer) VALUES (2,'bob','unused','book','unused')")
     def test_merged_records_filters_and_totals(self):
         first=self.start(1,1);second=self.start(2,2)
         tx={'pile_no':PILE,'gun_no':'01','serial_no':first['serial_no'],'total_energy':25000,'total_amount':30000,'start_time':'2026-10-12 09:00:00','end_time':'2026-10-12 09:30:00'}

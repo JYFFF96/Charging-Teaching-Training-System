@@ -42,6 +42,10 @@ class Charging(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.db=Path(self.tmp.name)/'customers.sqlite3'
         self.app=m.ChargingApp(self.db,Path(self.tmp.name)/'charge.html',True)
+        with self.app.connect() as c:
+            c.execute("INSERT INTO users(id,username,password,question,answer) VALUES (1,'alice','unused','movie','unused')")
+            c.execute("INSERT INTO users(id,username,password,question,answer) VALUES (2,'bob','unused','book','unused')")
+        self.app.ensure_wallets()
         m.CUSTOMER_APP=self.app;m.START_WAIT=.01;m.STOP_WAIT=.01
         m.SessionRegistry.sessions.clear();m.STORE.latest.clear()
         self.sock=FakeSocket();self.session=m.PileSession(self.sock,('127.0.0.1',1234));self.sock.session=self.session

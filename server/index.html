@@ -151,6 +151,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
     <a data-page="overview" class="on">运营总览</a>
     <a data-page="devices">设备监控</a>
     <a data-page="orders">充电记录</a>
+    <a data-page="wallets">模拟钱包</a>
     <a data-page="faults">故障管理</a>
     <a data-page="stations">充电站管理</a>
     <a data-page="logs">报文日志</a>
@@ -166,6 +167,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
     <a data-page="overview" class="on">📊 运营总览</a>
     <a data-page="devices">🔌 设备监控</a>
     <a data-page="orders">📋 充电记录</a>
+    <a data-page="wallets">💰 模拟钱包</a>
     <a data-page="faults">🛠 故障管理</a>
     <a data-page="stations">🏢 充电站管理</a>
     <a data-page="logs">📜 报文日志</a>
@@ -271,6 +273,20 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
         <div style="display:flex;gap:12px;align-items:center;margin-top:16px"><button id="recordPrev">上一页</button><span id="recordPage">第1页</span><button id="recordNext">下一页</button><label>每页<select id="recordSize"><option value="20">20</option><option value="50" selected>50</option><option value="100">100</option></select></label></div>
       </div>
     </section>
+
+    <section class="page" id="page-wallets"><div class="panel">
+      <h2>💰 客户模拟钱包</h2><p>仅数字模拟，不发生真实资金交易。新注册与首次开通钱包赠送1000元，仅赠送一次。管理员扣费不能动用充电预留额度。</p>
+      <form id="walletSearchForm" style="display:flex;gap:12px;margin:16px 0"><input id="walletSearch" placeholder="客户账号，支持部分匹配"><button class="primary">查询</button><button type="button" id="walletRefresh">刷新</button></form>
+      <div style="overflow-x:auto"><table id="walletTable"><thead><tr><th>客户账号</th><th>模拟余额(元)</th><th>可用余额(元)</th><th>充电预留(元)</th><th>操作</th></tr></thead><tbody></tbody></table></div>
+      <div style="display:flex;gap:12px;align-items:center;margin:16px 0"><button id="walletPrev">上一页</button><span id="walletPager"></span><button id="walletNext">下一页</button></div>
+      <h3>给指定账号充值 / 扣费</h3>
+      <form id="walletAdjustForm" style="display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin:16px 0">
+      <label>客户账号<input id="walletAccount" required minlength="4" maxlength="32" placeholder="完整注册账号"></label>
+      <label>操作<select id="walletAction"><option value="credit">模拟充值</option><option value="debit">模拟扣费</option></select></label>
+      <label>金额(元)<input id="walletAmount" required type="number" min="0.01" max="1000000" step="0.01"></label>
+      <label>备注<input id="walletNote" required maxlength="200" placeholder="填写调整原因"></label><button class="primary" id="walletSubmit">确认调整模拟余额</button></form>
+      <p id="walletError" role="status" style="color:var(--red)"></p><div id="walletLedger"></div>
+    </div></section>
 
     <!-- ========== 故障管理 ========== -->
     <section class="page" id="page-faults">
@@ -443,6 +459,7 @@ document.querySelectorAll("[data-page]").forEach(a=>{
     document.querySelectorAll("[data-page]").forEach(x=>x.classList.toggle("on",x===a));
     document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on",p.id==="page-"+a.dataset.page));
     if(a.dataset.page==="orders")initTx();
+    if(a.dataset.page==="wallets")initWallets();
   };
 });
 
@@ -605,6 +622,41 @@ $('#recordPrev').onclick=()=>{if(recordPage>1){recordPage--;initTx();}};
 $('#recordNext').onclick=()=>{if(recordPage<recordPages){recordPage++;initTx();}};
 $('#recordSize').onchange=()=>{recordPage=1;initTx();};
 setInterval(()=>{if(TOKEN&&!document.hidden&&$('#page-orders').classList.contains('on'))initTx();},15000);
+
+/* ---------- 模拟钱包管理 ---------- */
+let walletPage=1,walletPages=1,walletSearch='',walletRequest=0,walletOperation=null;
+function walletMoney(value){return (Number(value||0)/100).toFixed(2);}
+async function adminWalletFetch(path,body){
+ const options={headers:{Authorization:'Bearer '+TOKEN}};
+ if(body){options.method='POST';options.headers['Content-Type']='application/json';options.body=JSON.stringify(body);}
+ const response=await fetch(path,options),data=await response.json();
+ if(!response.ok)throw new Error(data.error||'模拟钱包请求失败');return data;
+}
+async function initWallets(){
+ if(!TOKEN)return;const request=++walletRequest;
+ try{const data=await adminWalletFetch('/api/customer-wallets?'+new URLSearchParams({username:walletSearch,page:walletPage}));if(request!==walletRequest)return;
+ walletPage=data.page;walletPages=data.pages;const tb=$('#walletTable tbody');tb.replaceChildren();
+ for(const user of data.users){const row=document.createElement('tr');for(const value of [user.username,walletMoney(user.balance_fen),walletMoney(user.available_fen),walletMoney(user.reserved_fen)]){const cell=document.createElement('td');cell.textContent=value;row.appendChild(cell);}const cell=document.createElement('td'),button=document.createElement('button');button.textContent='选择账户 / 查看流水';button.onclick=()=>{if($('#walletSubmit').disabled)return;$('#walletAccount').value=user.username;walletOperation=null;showWalletLedger(user.username);};cell.appendChild(button);row.appendChild(cell);tb.appendChild(row);}
+ if(!data.users.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=5;cell.textContent='没有符合条件的客户';row.appendChild(cell);tb.appendChild(row);}
+ $('#walletPager').textContent=`共 ${data.total} 个账户 · 第 ${walletPage} / ${walletPages} 页`;$('#walletPrev').disabled=walletPage<=1;$('#walletNext').disabled=walletPage>=walletPages;$('#walletError').textContent='';
+ }catch(error){if(request===walletRequest)$('#walletError').textContent=error.message;}
+}
+async function showWalletLedger(username){
+ try{const data=await adminWalletFetch('/api/customer-wallets/detail?username='+encodeURIComponent(username));const box=$('#walletLedger');box.replaceChildren();const heading=document.createElement('h3');heading.textContent=username+' · 模拟钱包流水';box.appendChild(heading);const kinds={bonus:'赠送',admin_credit:'管理员充值',admin_debit:'管理员扣费',charging:'充电扣费'};
+ for(const entry of data.wallet.ledger){const line=document.createElement('p');line.textContent=`${new Date(entry.created*1000).toLocaleString()} · ${kinds[entry.kind]||entry.kind} · ${entry.delta_fen>=0?'+':''}${walletMoney(entry.delta_fen)} 元 · 余额 ${walletMoney(entry.after_fen)} 元 · ${entry.note} · 操作人 ${entry.actor}`;box.appendChild(line);}
+ }catch(error){$('#walletError').textContent=error.message;}
+}
+$('#walletSearchForm').onsubmit=e=>{e.preventDefault();walletSearch=$('#walletSearch').value.trim();walletPage=1;initWallets();};
+$('#walletPrev').onclick=()=>{if(walletPage>1){walletPage--;initWallets();}};$('#walletNext').onclick=()=>{if(walletPage<walletPages){walletPage++;initWallets();}};
+$('#walletRefresh').onclick=initWallets;
+$('#walletAdjustForm').onsubmit=async e=>{
+ e.preventDefault();const payload={username:$('#walletAccount').value.trim(),action:$('#walletAction').value,amount:$('#walletAmount').value,note:$('#walletNote').value.trim()};
+ const signature=JSON.stringify(payload);if(!walletOperation||walletOperation.signature!==signature)walletOperation={signature,id:Date.now().toString(36)+'_'+Math.random().toString(36).slice(2)};
+ payload.request_id=walletOperation.id;$('#walletSubmit').disabled=true;$('#walletError').textContent='正在提交…';
+ try{const result=await adminWalletFetch('/api/customer-wallets/adjust',payload);walletOperation=null;$('#walletError').textContent='';toast((result.duplicate?'该操作此前已完成，未重复执行。':'模拟余额调整成功。')+' 当前余额：'+walletMoney(result.wallet.balance_fen)+' 元');await initWallets();await showWalletLedger(payload.username);e.target.reset();}
+ catch(error){$('#walletError').textContent=error.message+'（重试相同内容不会重复执行）';}finally{$('#walletSubmit').disabled=false;}
+};
+setInterval(()=>{if(TOKEN&&!document.hidden&&$('#page-wallets').classList.contains('on'))initWallets();},15000);
 
 /* ---------- API ---------- */
 async function api(path, body, method){

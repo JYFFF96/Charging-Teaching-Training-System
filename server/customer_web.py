@@ -45,9 +45,82 @@ class App:
             CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS resets(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, until REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS wallets(user_id INTEGER PRIMARY KEY,balance_fen INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS wallet_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_key TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,delta_fen INTEGER NOT NULL,before_fen INTEGER NOT NULL,after_fen INTEGER NOT NULL,
+                kind TEXT NOT NULL,note TEXT NOT NULL,actor TEXT NOT NULL,order_id TEXT,created REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS wallet_ledger_user ON wallet_ledger(user_id,id);
             ''')
         os.chmod(self.db, 0o600)
         self.dummy = digest('dummy-account-timing-value')
+        self.ensure_wallets()
+    def open_wallet(self,c,uid,reason='注册赠送模拟余额'):
+        if c.execute('SELECT 1 FROM wallets WHERE user_id=?',(uid,)).fetchone(): return
+        c.execute('INSERT INTO wallets VALUES (?,?)',(uid,100000))
+        c.execute('''INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,created)
+                     VALUES (?,?,?,0,?,'bonus',?,'system',?)''',
+                  ('bonus:'+str(uid),uid,100000,100000,reason,time.time()))
+    def ensure_wallets(self):
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            for row in c.execute('SELECT id FROM users').fetchall():
+                self.open_wallet(c,row['id'],'首次开通模拟钱包赠送')
+    def reserved(self,c,uid):
+        if not hasattr(self,'device'): return 0
+        return c.execute("SELECT coalesce(sum(reserved_fen),0) FROM orders WHERE user_id=? AND status IN ('starting','charging','stopping','unknown','ending')",(uid,)).fetchone()[0]
+    def wallet_snapshot(self,uid):
+        with self.connect() as c:
+            row=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
+            if not row: raise ApiError(404,'客户钱包不存在')
+            reserved=self.reserved(c,uid)
+            ledger=c.execute('SELECT delta_fen,after_fen,kind,note,actor,order_id,created FROM wallet_ledger WHERE user_id=? ORDER BY id DESC LIMIT 50',(uid,)).fetchall()
+        return {'balance_fen':row['balance_fen'],'reserved_fen':reserved,
+                'available_fen':row['balance_fen']-reserved,'simulated':True,'ledger':[dict(r) for r in ledger]}
+    def admin_wallets(self,raw):
+        q=parse_qs(urlsplit(raw).query);username=q.get('username',[''])[0].strip()
+        try: page=max(1,int(q.get('page',['1'])[0]));size=min(100,max(1,int(q.get('page_size',['50'])[0])))
+        except ValueError: raise ApiError(400,'分页参数无效')
+        with self.connect() as c:
+            count=c.execute("SELECT count(*) FROM users WHERE instr(lower(username),lower(?))>0",(username,)).fetchone()[0]
+            pages=max(1,(count+size-1)//size);page=min(page,pages)
+            rows=c.execute('''SELECT u.id,u.username,w.balance_fen FROM users u JOIN wallets w ON w.user_id=u.id
+                WHERE instr(lower(u.username),lower(?))>0 ORDER BY u.id DESC LIMIT ? OFFSET ?''',(username,size,(page-1)*size)).fetchall()
+            users=[]
+            for row in rows:
+                d=dict(row);d['reserved_fen']=self.reserved(c,row['id']);d['available_fen']=row['balance_fen']-d['reserved_fen'];users.append(d)
+        return {'users':users,'page':page,'pages':pages,'total':count,'simulated':True}
+    def admin_adjust(self,p,actor):
+        username=p.get('username');action=p.get('action');amount=p.get('amount');rid=p.get('request_id');note=p.get('note')
+        if not isinstance(username,str) or not re.fullmatch('[A-Za-z0-9_]{4,32}',username): raise ApiError(400,'客户账号无效')
+        if action not in ('credit','debit'): raise ApiError(400,'请选择充值或扣费')
+        # Decimal input is accepted only with at most two fractional places. No float currency arithmetic.
+        if isinstance(amount,bool) or not re.fullmatch(r'\d{1,8}(\.\d{1,2})?',str(amount)): raise ApiError(400,'金额需为正数，最多两位小数')
+        from decimal import Decimal
+        fen=int(Decimal(str(amount))*100)
+        if not 1<=fen<=100000000: raise ApiError(400,'单次金额需在0.01–1000000元之间')
+        if not isinstance(rid,str) or not re.fullmatch('[A-Za-z0-9_-]{8,80}',rid): raise ApiError(400,'操作凭证无效')
+        if not isinstance(note,str) or not 1<=len(note.strip())<=200: raise ApiError(400,'请填写1–200字操作备注')
+        note=note.strip();delta=fen if action=='credit' else -fen;key='admin:'+actor+':'+rid
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            u=c.execute('SELECT id FROM users WHERE username=?',(username.lower(),)).fetchone()
+            if not u: raise ApiError(404,'客户账号不存在')
+            uid=u['id'];old=c.execute('SELECT * FROM wallet_ledger WHERE entry_key=?',(key,)).fetchone()
+            if old:
+                if old['user_id']!=uid or old['delta_fen']!=delta or old['note']!=note: raise ApiError(409,'操作凭证已用于其他内容，请重新提交')
+                result={'ok':True,'duplicate':True,'entry_id':old['id']}
+            else:
+                row=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
+                if not row: raise ApiError(404,'钱包不存在')
+                before=row['balance_fen']
+                if delta<0 and before-self.reserved(c,uid)<fen: raise ApiError(409,'可用模拟余额不足；进行中订单的预留额度不能扣除')
+                after=before+delta
+                if abs(after)>9000000000000000: raise ApiError(400,'余额超出支持范围')
+                c.execute('UPDATE wallets SET balance_fen=? WHERE user_id=?',(after,uid))
+                eid=c.execute('''INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,created)
+                    VALUES (?,?,?,?,?,?,?,?,?)''',(key,uid,delta,before,after,'admin_'+action,note,actor,time.time())).lastrowid
+                result={'ok':True,'duplicate':False,'entry_id':eid}
+        result['wallet']=self.wallet_snapshot(uid);return result
     def connect(self):
         c = sqlite3.connect(self.db, timeout=15)
         c.row_factory = sqlite3.Row
@@ -116,6 +189,11 @@ def handler_for(app):
             if path=='/api/customer/me':
                 u=app.session(self.token())
                 return self.send({'user':{'username':u['username']}},200) if u else self.send({'error':'请先登录'},401)
+            if path=='/api/customer/wallet':
+                u=app.session(self.token())
+                if not u: return self.send({'error':'请先登录'},401)
+                try: return self.send({'wallet':app.wallet_snapshot(u['id'])})
+                except ApiError as e: return self.send({'error':e.message},e.status)
             if path=='/api/customer/config':
                 return self.send({'insecure_test':app.insecure,'charging_demo':True})
             self.send({'error':'接口不存在'},404)
@@ -158,6 +236,7 @@ def handler_for(app):
                     with app.connect() as c:
                         try:
                             uid=c.execute('INSERT INTO users(username,password,question,answer) VALUES (?,?,?,?)',(username,digest(pwd),question,digest(answer))).lastrowid
+                            app.open_wallet(c,uid)
                         except sqlite3.IntegrityError: raise ApiError(409,'该账号无法注册，请换一个账号或登录')
                     return self.send({'ok':True,'user':{'username':username}},201,cookie=self.cookie(app.issue(uid)))
                 if action=='login':

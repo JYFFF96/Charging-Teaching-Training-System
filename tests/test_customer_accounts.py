@@ -33,6 +33,7 @@ class Accounts(unittest.TestCase):
     def test_account_lifecycle_and_persistence(self):
         p={'username':'Customer_1','password':'test-password-123','security_question_id':'movie','security_answer':'My special answer'}
         status,d,cookie=self.request('/api/customer/register',p);self.assertEqual(status,201)
+        self.assertEqual(self.app.wallet_snapshot(1)['balance_fen'],100000)
         self.assertEqual(self.request('/api/customer/me',cookie=cookie)[1]['user']['username'],'customer_1')
         self.assertEqual(self.request('/api/customer/register',p)[0],409)
         self.assertEqual(self.request('/api/customer/login',{'username':'customer_1','password':'wrong-password'})[0],401)

@@ -874,6 +874,7 @@ WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 # 登录会话令牌（内存态，重启后失效）
 SESSION_TOKENS = set()
+ADMIN_SESSION_USERS = {}
 SESSION_LOCK = threading.Lock()
 DEFAULT_CREDENTIALS = {"admin": "123456"}   # 超级管理员，可用 --admin-user/--admin-pass 覆盖
 
@@ -1220,6 +1221,16 @@ def make_api_handler(token, credentials=None):
             if p == "/api/piles":
                 return self._json({"piles": piles_snapshot(), "time": _now_str(),
                                    "billing_model": CFG.billing_model_no})
+            if p == "/api/customer-wallets/detail":
+                if not CUSTOMER_APP: return self._json({"error":"客户服务未启用"},503)
+                username=parse_qs(urlparse(self.path).query).get("username",[""])[0].strip().lower()
+                with CUSTOMER_APP.connect() as c: user=c.execute('SELECT id FROM users WHERE username=?',(username,)).fetchone()
+                if not user: return self._json({"error":"客户账号不存在"},404)
+                return self._json({"wallet":CUSTOMER_APP.wallet_snapshot(user['id'])})
+            if p == "/api/customer-wallets":
+                if not CUSTOMER_APP: return self._json({"error": "客户服务未启用"}, 503)
+                try: return self._json(CUSTOMER_APP.admin_wallets(self.path))
+                except ApiError as e: return self._json({"error": e.message}, e.status)
             if p == "/api/charging-records":
                 if not CUSTOMER_APP:
                     return self._json({"error": "客户数据库未启用"}, 503)
@@ -1322,6 +1333,7 @@ def make_api_handler(token, credentials=None):
             t = secrets.token_hex(16)
             with SESSION_LOCK:
                 SESSION_TOKENS.add(t)
+                ADMIN_SESSION_USERS[t] = user
             log.info("[WEB] 用户 %s 登录成功", user)
             return self._json({"ok": True, "token": t, "name": user})
 
@@ -1330,6 +1342,7 @@ def make_api_handler(token, credentials=None):
             if auth.startswith("Bearer "):
                 with SESSION_LOCK:
                     SESSION_TOKENS.discard(auth[7:])
+                    ADMIN_SESSION_USERS.pop(auth[7:], None)
             return self._json({"ok": True})
 
         def _station_from_payload(self, pl, old=None):
@@ -1375,6 +1388,19 @@ def make_api_handler(token, credentials=None):
             if not self._auth_ok():
                 return self._json({"error": "未授权"}, 401)
             p = urlparse(self.path).path
+            if p == "/api/customer-wallets/adjust":
+                if not CUSTOMER_APP: return self._json({"error": "客户服务未启用"}, 503)
+                try:
+                    length=int(self.headers.get("Content-Length",0))
+                    if not 0<length<=8192: raise ApiError(400,"请求长度无效")
+                    payload=json.loads(self.rfile.read(length))
+                    if not isinstance(payload,dict): raise ApiError(400,"请求格式无效")
+                    auth=self.headers.get("Authorization", "")
+                    credential=auth[7:] if auth.startswith("Bearer ") else parse_qs(urlparse(self.path).query).get("token",[""])[0]
+                    with SESSION_LOCK: actor=ADMIN_SESSION_USERS.get(credential,"静态管理员")
+                    return self._json(CUSTOMER_APP.admin_adjust(payload,actor))
+                except ApiError as e: return self._json({"error":e.message},e.status)
+                except (ValueError,TypeError): return self._json({"error":"请求格式无效"},400)
             if p == "/api/logs/clear":
                 ok = clear_log_file()
                 if ok:
@@ -1710,9 +1736,82 @@ class CustomerAccounts:
             CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS resets(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, until REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS wallets(user_id INTEGER PRIMARY KEY,balance_fen INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS wallet_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_key TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,delta_fen INTEGER NOT NULL,before_fen INTEGER NOT NULL,after_fen INTEGER NOT NULL,
+                kind TEXT NOT NULL,note TEXT NOT NULL,actor TEXT NOT NULL,order_id TEXT,created REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS wallet_ledger_user ON wallet_ledger(user_id,id);
             ''')
         os.chmod(self.db, 0o600)
         self.dummy = digest('dummy-account-timing-value')
+        self.ensure_wallets()
+    def open_wallet(self,c,uid,reason='注册赠送模拟余额'):
+        if c.execute('SELECT 1 FROM wallets WHERE user_id=?',(uid,)).fetchone(): return
+        c.execute('INSERT INTO wallets VALUES (?,?)',(uid,100000))
+        c.execute('''INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,created)
+                     VALUES (?,?,?,0,?,'bonus',?,'system',?)''',
+                  ('bonus:'+str(uid),uid,100000,100000,reason,time.time()))
+    def ensure_wallets(self):
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            for row in c.execute('SELECT id FROM users').fetchall():
+                self.open_wallet(c,row['id'],'首次开通模拟钱包赠送')
+    def reserved(self,c,uid):
+        if not hasattr(self,'device'): return 0
+        return c.execute("SELECT coalesce(sum(reserved_fen),0) FROM orders WHERE user_id=? AND status IN ('starting','charging','stopping','unknown','ending')",(uid,)).fetchone()[0]
+    def wallet_snapshot(self,uid):
+        with self.connect() as c:
+            row=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
+            if not row: raise ApiError(404,'客户钱包不存在')
+            reserved=self.reserved(c,uid)
+            ledger=c.execute('SELECT delta_fen,after_fen,kind,note,actor,order_id,created FROM wallet_ledger WHERE user_id=? ORDER BY id DESC LIMIT 50',(uid,)).fetchall()
+        return {'balance_fen':row['balance_fen'],'reserved_fen':reserved,
+                'available_fen':row['balance_fen']-reserved,'simulated':True,'ledger':[dict(r) for r in ledger]}
+    def admin_wallets(self,raw):
+        q=parse_qs(urlsplit(raw).query);username=q.get('username',[''])[0].strip()
+        try: page=max(1,int(q.get('page',['1'])[0]));size=min(100,max(1,int(q.get('page_size',['50'])[0])))
+        except ValueError: raise ApiError(400,'分页参数无效')
+        with self.connect() as c:
+            count=c.execute("SELECT count(*) FROM users WHERE instr(lower(username),lower(?))>0",(username,)).fetchone()[0]
+            pages=max(1,(count+size-1)//size);page=min(page,pages)
+            rows=c.execute('''SELECT u.id,u.username,w.balance_fen FROM users u JOIN wallets w ON w.user_id=u.id
+                WHERE instr(lower(u.username),lower(?))>0 ORDER BY u.id DESC LIMIT ? OFFSET ?''',(username,size,(page-1)*size)).fetchall()
+            users=[]
+            for row in rows:
+                d=dict(row);d['reserved_fen']=self.reserved(c,row['id']);d['available_fen']=row['balance_fen']-d['reserved_fen'];users.append(d)
+        return {'users':users,'page':page,'pages':pages,'total':count,'simulated':True}
+    def admin_adjust(self,p,actor):
+        username=p.get('username');action=p.get('action');amount=p.get('amount');rid=p.get('request_id');note=p.get('note')
+        if not isinstance(username,str) or not re.fullmatch('[A-Za-z0-9_]{4,32}',username): raise ApiError(400,'客户账号无效')
+        if action not in ('credit','debit'): raise ApiError(400,'请选择充值或扣费')
+        # Decimal input is accepted only with at most two fractional places. No float currency arithmetic.
+        if isinstance(amount,bool) or not re.fullmatch(r'\d{1,8}(\.\d{1,2})?',str(amount)): raise ApiError(400,'金额需为正数，最多两位小数')
+        from decimal import Decimal
+        fen=int(Decimal(str(amount))*100)
+        if not 1<=fen<=100000000: raise ApiError(400,'单次金额需在0.01–1000000元之间')
+        if not isinstance(rid,str) or not re.fullmatch('[A-Za-z0-9_-]{8,80}',rid): raise ApiError(400,'操作凭证无效')
+        if not isinstance(note,str) or not 1<=len(note.strip())<=200: raise ApiError(400,'请填写1–200字操作备注')
+        note=note.strip();delta=fen if action=='credit' else -fen;key='admin:'+actor+':'+rid
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            u=c.execute('SELECT id FROM users WHERE username=?',(username.lower(),)).fetchone()
+            if not u: raise ApiError(404,'客户账号不存在')
+            uid=u['id'];old=c.execute('SELECT * FROM wallet_ledger WHERE entry_key=?',(key,)).fetchone()
+            if old:
+                if old['user_id']!=uid or old['delta_fen']!=delta or old['note']!=note: raise ApiError(409,'操作凭证已用于其他内容，请重新提交')
+                result={'ok':True,'duplicate':True,'entry_id':old['id']}
+            else:
+                row=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
+                if not row: raise ApiError(404,'钱包不存在')
+                before=row['balance_fen']
+                if delta<0 and before-self.reserved(c,uid)<fen: raise ApiError(409,'可用模拟余额不足；进行中订单的预留额度不能扣除')
+                after=before+delta
+                if abs(after)>9000000000000000: raise ApiError(400,'余额超出支持范围')
+                c.execute('UPDATE wallets SET balance_fen=? WHERE user_id=?',(after,uid))
+                eid=c.execute('''INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,created)
+                    VALUES (?,?,?,?,?,?,?,?,?)''',(key,uid,delta,before,after,'admin_'+action,note,actor,time.time())).lastrowid
+                result={'ok':True,'duplicate':False,'entry_id':eid}
+        result['wallet']=self.wallet_snapshot(uid);return result
     def connect(self):
         c = sqlite3.connect(self.db, timeout=15)
         c.row_factory = sqlite3.Row
@@ -1781,6 +1880,11 @@ def handler_for(app):
             if path=='/api/customer/me':
                 u=app.session(self.token())
                 return self.send({'user':{'username':u['username']}},200) if u else self.send({'error':'请先登录'},401)
+            if path=='/api/customer/wallet':
+                u=app.session(self.token())
+                if not u: return self.send({'error':'请先登录'},401)
+                try: return self.send({'wallet':app.wallet_snapshot(u['id'])})
+                except ApiError as e: return self.send({'error':e.message},e.status)
             if path=='/api/customer/config':
                 return self.send({'insecure_test':app.insecure,'charging_demo':not hasattr(app,'device'),'test_balance_yuan':getattr(app,'balance_fen',0)/100})
             if hasattr(app, 'customer_get') and path.startswith('/api/customer/'):
@@ -1835,6 +1939,7 @@ def handler_for(app):
                     with app.connect() as c:
                         try:
                             uid=c.execute('INSERT INTO users(username,password,question,answer) VALUES (?,?,?,?)',(username,digest(pwd),question,digest(answer))).lastrowid
+                            app.open_wallet(c,uid)
                         except sqlite3.IntegrityError: raise ApiError(409,'该账号无法注册，请换一个账号或登录')
                     return self.send({'ok':True,'user':{'username':username}},201,cookie=self.cookie(app.issue(uid)))
                 if action=='login':
@@ -1902,6 +2007,10 @@ class ChargingApp(CustomerAccounts):
             ''')
             c.execute("UPDATE orders SET status='unknown',note='服务重启，等待设备报文核实' WHERE status IN ('starting','stopping')")
         with self.connect() as c:
+            columns={row['name'] for row in c.execute('PRAGMA table_info(orders)')}
+            for name,definition in [('reserved_fen','INTEGER NOT NULL DEFAULT 0'),('wallet_managed','INTEGER NOT NULL DEFAULT 0'),
+                                    ('settled_fen','INTEGER'),('settlement_status',"TEXT NOT NULL DEFAULT 'legacy'"),('fail_reason','INTEGER')]:
+                if name not in columns: c.execute('ALTER TABLE orders ADD COLUMN '+name+' '+definition)
             history=STORE.all_transactions()
             for row in c.execute('SELECT transaction_json FROM orders WHERE transaction_json IS NOT NULL').fetchall():
                 try: history.append(json.loads(row['transaction_json']))
@@ -2015,6 +2124,7 @@ class ChargingApp(CustomerAccounts):
         return {'id':row['id'],'pile_no':row['pile_no'],'gun_no':row['gun_no'],
                 'serial_no':row['serial_no'],'status':row['status'],'note':row['note'],
                 'created_at':row['created'],'updated_at':row['updated'],'device_state':state,
+                'reserved_fen':row['reserved_fen'],'settled_fen':row['settled_fen'],'settlement_status':row['settlement_status'],'fail_reason':row['fail_reason'],
                 'latest':data,'transaction':json.loads(row['transaction_json']) if row['transaction_json'] else None}
     def customer_get(self,path,raw,uid):
         if path=='/api/customer/device':
@@ -2060,17 +2170,23 @@ class ChargingApp(CustomerAccounts):
                     return {'order':self.order_view(row)}
                 current,data,state=self.device(pile,gun)
                 if current is not sess or state!='idle': raise ApiError(409,'设备不是可启动的空闲状态')
-                if data.get('gun_plugged')!=1: raise ApiError(409,'请先插枪')
+                if data.get('gun_plugged')!=1: raise ApiError(409,'未检测到插枪，请插好枪；上一轮充电结束后，请先拔枪再重新插枪')
                 # Use the original serial layout, with decimal BCD suffix and unique DB constraint.
                 serial=(sess.pile_no_bcd+str_to_bcd(str(gun),1)+str_to_bcd(datetime.now().strftime('%y%m%d%H%M%S'),6)+str_to_bcd(str(secrets.randbelow(10000)),2))
                 oid=secrets.token_hex(16);key=serial.hex().upper();now=time.time()
                 try:
                     with self.connect() as c:
-                        c.execute('INSERT INTO orders(id,user_id,pile_no,gun_no,serial_no,status,created,updated) VALUES (?,?,?,?,?,?,?,?)',
-                                  (oid,uid,pile,gun,key,'starting',now,now))
+                        c.execute('BEGIN IMMEDIATE')
+                        wallet=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
+                        if not wallet: raise ApiError(404,'客户钱包不存在')
+                        available=wallet['balance_fen']-self.reserved(c,uid)
+                        if available<=0: raise ApiError(409,'可用模拟余额不足，请联系管理员充值')
+                        reserve=min(available,self.balance_fen)
+                        c.execute('INSERT INTO orders(id,user_id,pile_no,gun_no,serial_no,status,created,updated,reserved_fen,wallet_managed,settlement_status) VALUES (?,?,?,?,?,?,?,?,?,1,?)',
+                                  (oid,uid,pile,gun,key,'starting',now,now,reserve,'pending'))
                 except sqlite3.IntegrityError: raise ApiError(409,'设备订单已变更，请刷新后重试')
                 try:
-                    sess.dl_remote_start(gun,CFG.logic_card_no,'0',self.balance_fen,serial)
+                    sess.dl_remote_start(gun,CFG.logic_card_no,'0',reserve,serial)
                     ev,box=sess.pending_start[key]
                     if not ev.wait(START_WAIT): self.set_unknown(key,'启动回复超时，等待设备确认')
                     # on-frame hook already updates the durable order, including very fast replies.
@@ -2110,10 +2226,14 @@ class ChargingApp(CustomerAccounts):
         with self.connect() as c:
             c.execute("UPDATE orders SET status='unknown',note=?,updated=? WHERE serial_no=? AND status IN ('starting','stopping')",(note,time.time(),serial))
     def start_reply(self,d):
+        success=d.get('start_result')==1
+        code=d.get('fail_reason')
+        reasons={1:'设备编号不匹配',2:'该枪已在充电',3:'设备故障',4:'设备离线',
+                 5:'未检测到有效插枪。上一轮充电结束后，必须先拔枪，再重新插好枪后启动'}
+        note='' if success else '启动失败：'+reasons.get(code,'设备拒绝启动')+'（原因码 '+str(code)+'）'
         with self.connect() as c:
-            c.execute("UPDATE orders SET status=?,note=?,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('starting','unknown')",
-                      ('charging' if d.get('start_result')==1 else 'failed','' if d.get('start_result')==1 else '启动失败，原因：'+str(d.get('fail_reason')),
-                       time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))
+            c.execute("UPDATE orders SET status=?,note=?,fail_reason=?,reserved_fen=CASE WHEN ? THEN reserved_fen ELSE 0 END,settlement_status=CASE WHEN ? THEN settlement_status ELSE 'not_charged' END,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('starting','unknown')",
+                      ('charging' if success else 'failed',note,None if success else code,success,success,time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))
     def realtime(self,d):
         if d.get('_truncated'): return
         status=d.get('status');serial=d.get('serial_no')
@@ -2125,10 +2245,32 @@ class ChargingApp(CustomerAccounts):
                 c.execute("UPDATE orders SET status='ending',note='设备已空闲，等待最终交易记录',updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('charging','stopping','unknown')",(time.time(),serial,d.get('pile_no'),int(d.get('gun_no','0'))))
     def transaction(self,d):
         if d.get('_truncated'): raise ValueError('交易报文不完整，不能确认客户账单')
-        self.archive_transaction(d)
+        raw=d.get('total_amount')
+        if not isinstance(raw,int) or raw<0: raise ValueError('账单金额无效')
+        fen=(raw+50)//100  # 0.0001 yuan -> fen, round half up.
         with self.connect() as c:
-            c.execute("UPDATE orders SET status='finished',note='设备交易已上报；未接支付扣款',transaction_json=?,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=?",
-                      (json.dumps(d,ensure_ascii=False),time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))
+            c.execute('BEGIN IMMEDIATE')
+            self._archive_write(c,d)
+            row=c.execute('SELECT * FROM orders WHERE serial_no=? AND pile_no=? AND gun_no=?',
+                          (d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0')))).fetchone()
+            if not row: return  # Unassociated device transactions never charge an arbitrary customer.
+            settlement=row['settlement_status'];settled=row['settled_fen'];note='设备交易已上报；历史订单不追扣模拟余额'
+            if row['wallet_managed']:
+                key='charge:'+row['id'];entry=c.execute('SELECT * FROM wallet_ledger WHERE entry_key=?',(key,)).fetchone()
+                if entry:
+                    settled=-entry['delta_fen']
+                    settlement='settled' if settled==fen else 'review'
+                    note='模拟扣费已完成' if settled==fen else '重复账单金额发生变化，未重复扣费，请管理员核查'
+                else:
+                    w=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(row['user_id'],)).fetchone()
+                    if not w: raise ValueError('账单客户钱包不存在')
+                    before=w['balance_fen'];after=before-fen
+                    c.execute('UPDATE wallets SET balance_fen=? WHERE user_id=?',(after,row['user_id']))
+                    c.execute("""INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,order_id,created)
+                        VALUES (?,?,?,?,?,'charging',?,'device',?,?)""",(key,row['user_id'],-fen,before,after,'按设备最终账单模拟扣费',row['id'],time.time()))
+                    settled=fen;settlement='settled';note='模拟扣费已完成' if after>=0 else '模拟扣费已完成，余额为负，请联系管理员补充模拟余额'
+            c.execute("UPDATE orders SET status='finished',note=?,reserved_fen=0,settled_fen=?,settlement_status=?,transaction_json=?,updated=? WHERE id=?",
+                      (note,settled,settlement,json.dumps(d,ensure_ascii=False),time.time(),row['id']))
 
 class ReusableYkcTCPServer(ThreadingTCPServer):
     allow_reuse_address = True
@@ -2151,7 +2293,7 @@ def main():
     ap.add_argument("--customer-page", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "charge.html"))
     ap.add_argument("--customer-db", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "customer_data", "customers.sqlite3"))
     ap.add_argument("--customer-https", action="store_true", help="HTTPS反向代理模式，启用Secure Cookie")
-    ap.add_argument("--customer-test-balance-fen", type=int, default=100000, help="联调下发额度(分)，不是客户充值或支付")
+    ap.add_argument("--customer-test-balance-fen", type=int, default=100000, help="单次模拟充电预留额度上限(分)，实际不超过可用余额")
     args = ap.parse_args()
     if args.customer_port and len({args.port,args.web_port,args.customer_port}) != 3:
         ap.error("设备、管理、客户端口不能重复")
