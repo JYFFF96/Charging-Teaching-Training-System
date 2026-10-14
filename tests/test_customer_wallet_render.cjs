@@ -21,5 +21,11 @@ if(!element('view').innerHTML.includes('id="stop"')||element('view').innerHTML.i
 vm.runInContext("order.status='finished';order.settlement_status='settled';order.settled_fen=1235;render()",context);
 if(!element('view').innerHTML.includes('已扣费：12.35'))throw Error('settled amount');vm.runInContext("order.transaction={total_amount:10050,total_energy:700};render()",context);if(!element('view').innerHTML.includes('<strong>1.01</strong>'))throw Error('amount cent rounding');
 vm.runInContext("wallet.ledger=[{kind:'admin_credit',delta_fen:100,after_fen:100100,created:1,note:'<img src=x onerror=alert(1)>'}];page='wallet';render()",context);
-text=element('view').innerHTML;if(!text.includes('&lt;img')||text.includes('<img src=x'))throw Error('unsafe ledger rendering');console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
+text=element('view').innerHTML;if(!text.includes('&lt;img')||text.includes('<img src=x'))throw Error('unsafe ledger rendering');vm.runInContext("orders=[{id:'row1',serial_no:'serial1',created_at:1791968400,pile_no:'32010200000001',gun_no:1,status:'finished',settlement_status:'settled',settled_fen:1235},{id:'row2',created_at:1791968500,pile_no:'<img>',gun_no:2,status:'failed',settlement_status:'not_charged'},{id:'row3',pile_no:'32010200000001',gun_no:1,status:'ending'}];page='orders';render()",context);
+text=element('view').innerHTML;if(!text.includes('<table class="order-table">')||!text.includes('12.35')||!text.includes('0.00')||!text.includes('等待账单')||text.includes('<img>')||text.includes('>查看订单</button>'))throw Error('order table rows');
+if(vm.runInContext("orderCost(orders[2])",context)!=='—')throw Error('pending cost must not appear free');
+const row={dataset:{order:'row1'}};element('view').querySelectorAll=selector=>selector==='[data-order]'?[row]:[];
+vm.runInContext('render()',context);row.onclick();if(!element('view').innerHTML.includes('serial1')||!element('view').innerHTML.includes('订单编号'))throw Error('row detail navigation');
+vm.runInContext("page='orders';render()",context);let prevented=false;row.onkeydown({key:'Enter',preventDefault(){prevented=true}});if(!prevented||!element('view').innerHTML.includes('serial1'))throw Error('keyboard row navigation');
+console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});
