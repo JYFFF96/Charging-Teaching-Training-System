@@ -2179,6 +2179,14 @@ class ChargingApp(CustomerAccounts):
     def customer_post(self,path,p,uid):
         if path=='/api/customer/orders':
             pile,gun=self.target(p)
+            requested=None
+            if 'reserve_amount' in p:
+                amount=p['reserve_amount']
+                if isinstance(amount,bool) or not re.fullmatch(r'\d{1,8}(\.\d{1,2})?',str(amount)):
+                    raise ApiError(400,'预留金额需为正数，最多两位小数')
+                from decimal import Decimal
+                requested=int(Decimal(str(amount))*100)
+                if not 1<=requested<=0xFFFFFFFF: raise ApiError(400,'预留金额超出支持范围')
             row=self.active(pile,gun)
             if row:
                 if row['user_id']!=uid: raise ApiError(409,'该枪正在使用中')
@@ -2204,7 +2212,8 @@ class ChargingApp(CustomerAccounts):
                         if not wallet: raise ApiError(404,'客户钱包不存在')
                         available=wallet['balance_fen']-self.reserved(c,uid)
                         if available<=0: raise ApiError(409,'可用余额不足，请联系管理员充值')
-                        reserve=min(available,self.balance_fen)
+                        if requested is not None and requested>available: raise ApiError(409,'预留金额不能超过可用余额，请减少金额')
+                        reserve=requested if requested is not None else min(available,self.balance_fen)
                         c.execute('INSERT INTO orders(id,user_id,pile_no,gun_no,serial_no,status,created,updated,reserved_fen,wallet_managed,settlement_status) VALUES (?,?,?,?,?,?,?,?,?,1,?)',
                                   (oid,uid,pile,gun,key,'starting',now,now,reserve,'pending'))
                 except sqlite3.IntegrityError: raise ApiError(409,'设备订单已变更，请刷新后重试')
@@ -2321,7 +2330,7 @@ def main():
     ap.add_argument("--customer-page", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "charge.html"))
     ap.add_argument("--customer-db", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "customer_data", "customers.sqlite3"))
     ap.add_argument("--customer-https", action="store_true", help="HTTPS反向代理模式，启用Secure Cookie")
-    ap.add_argument("--customer-test-balance-fen", type=int, default=100000, help="单次模拟充电预留额度上限(分)，实际不超过可用余额")
+    ap.add_argument("--customer-test-balance-fen", type=int, default=100000, help="旧客户端未填写预留金额时的默认额度上限(分)")
     args = ap.parse_args()
     if args.customer_port and len({args.port,args.web_port,args.customer_port}) != 3:
         ap.error("设备、管理、客户端口不能重复")

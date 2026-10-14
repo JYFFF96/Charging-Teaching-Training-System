@@ -104,6 +104,25 @@ class Wallet(unittest.TestCase):
             row=self.app.owned(order['id'],1)
             self.assertIn(expected,row['note']);self.assertIn('原因码 '+str(code),row['note'])
 
+    def test_customer_selected_reservation_is_sent_exactly(self):
+        self.app.balance_fen=10000
+        order=self.app.customer_post('/api/customer/orders',{'pile_no':fixture.PILE,'gun_no':1,'reserve_amount':'250.00'},1)['order']
+        self.assertEqual(order['reserved_fen'],25000)
+        self.assertEqual(self.app.wallet_snapshot(1)['available_fen'],75000)
+        _,_,_,data,_=m.try_parse_frame(self.sock.frames[0])
+        self.assertEqual(m.parse_body(0x34,data)['balance'],25000)
+        self.app.transaction(self.invoice(order,30000))
+        self.assertEqual(self.app.wallet_snapshot(1)['balance_fen'],99700)
+        self.assertEqual(self.app.wallet_snapshot(1)['reserved_fen'],0)
+
+    def test_invalid_or_unaffordable_reservation_rejected_before_command(self):
+        for amount in ('0','-1','0.001','1e2',True,None,'1500'):
+            with self.assertRaises(m.ApiError):
+                self.app.customer_post('/api/customer/orders',{'pile_no':fixture.PILE,'gun_no':1,'reserve_amount':amount},1)
+        self.assertEqual(len(self.sock.frames),0)
+        self.assertIsNone(self.app.active(fixture.PILE,1))
+        self.assertEqual(self.app.wallet_snapshot(1)['balance_fen'],100000)
+
     def test_admin_wallet_http_permissions(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),m.make_api_handler('manager'))
         threading.Thread(target=server.serve_forever,daemon=True).start()
