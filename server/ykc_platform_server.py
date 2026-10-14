@@ -2135,6 +2135,10 @@ class ChargingApp(CustomerAccounts):
     def active(self,pile,gun):
         with self.connect() as c:
             return c.execute("SELECT * FROM orders WHERE pile_no=? AND gun_no=? AND status IN ('starting','charging','stopping','unknown','ending')",(pile,gun)).fetchone()
+    def active_user(self,uid,c=None):
+        sql="SELECT * FROM orders WHERE user_id=? AND status IN ('starting','charging','stopping','unknown','ending') ORDER BY created LIMIT 1"
+        if c is not None: return c.execute(sql,(uid,)).fetchone()
+        with self.connect() as conn: return conn.execute(sql,(uid,)).fetchone()
     def owned(self,oid,uid):
         with self.connect() as c:
             row=c.execute('SELECT * FROM orders WHERE id=? AND user_id=?',(oid,uid)).fetchone()
@@ -2170,10 +2174,15 @@ class ChargingApp(CustomerAccounts):
             _,data,state=self.device(pile,gun)
             row=self.active(pile,gun)
             if row and row['user_id']!=uid:
-                return {'availability':'occupied','message':'该枪正在使用中','pile_no':pile,'gun_no':gun}
+                return {'availability':'occupied','message':'该充电枪正在使用中，请选择其他充电枪。','pile_no':pile,'gun_no':gun}
             if row:
                 return {'availability':'mine','order':self.order_view(row),'pile_no':pile,'gun_no':gun}
-            if state=='charging': state='occupied'
+            if state=='charging':
+                return {'availability':'occupied','message':'该充电枪正在使用中，请选择其他充电枪。','pile_no':pile,'gun_no':gun}
+            own=self.active_user(uid)
+            if own:
+                return {'availability':'account_busy','message':'您有一笔未结束的充电订单，请结束并完成结算后再使用其他充电枪。',
+                        'active_order':self.order_view(own),'pile_no':pile,'gun_no':gun}
             prices={k:{'electricity':v[0]/100000,'service':v[1]/100000} for k,v in CFG.rates.items()}
             return {'availability':state,'pile_no':pile,'gun_no':gun,'latest':data,
                     'billing':{'rates':prices,'periods':CFG.periods,'loss_ratio':CFG.loss_ratio},'payment_enabled':False}
@@ -2206,6 +2215,7 @@ class ChargingApp(CustomerAccounts):
             if row:
                 if row['user_id']!=uid: raise ApiError(409,'该枪正在使用中')
                 return {'order':self.order_view(row)}
+            if self.active_user(uid): raise ApiError(409,'您有一笔未结束的充电订单，请结束并完成结算后再使用其他充电枪')
             sess,_,_=self.device(pile,gun)
             if not sess: raise ApiError(409,'桩离线，无法启动')
             with sess.gun_locks[gun]:
@@ -2223,6 +2233,7 @@ class ChargingApp(CustomerAccounts):
                     with self.connect() as c:
                         c.execute('BEGIN IMMEDIATE')
                         if not c.execute('SELECT 1 FROM users WHERE id=? AND deleted=0',(uid,)).fetchone(): raise ApiError(401,'账号已删除或不存在')
+                        if self.active_user(uid,c): raise ApiError(409,'您有一笔未结束的充电订单，请结束并完成结算后再使用其他充电枪')
                         wallet=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
                         if not wallet: raise ApiError(404,'客户钱包不存在')
                         available=wallet['balance_fen']-self.reserved(c,uid)

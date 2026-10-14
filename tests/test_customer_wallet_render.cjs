@@ -6,7 +6,12 @@ vm.createContext(context);const html=fs.readFileSync(path.join(__dirname,'../cus
 (async()=>{await new Promise(setImmediate);await new Promise(setImmediate);
 vm.runInContext("user='alice';wallet={balance_fen:100000,available_fen:90000,reserved_fen:10000,ledger:[]};device={availability:'idle',latest:{gun_plugged:1}};page='device';render()",context);
 let text=element('view').innerHTML;if(!text.includes('id="reserveAmount"')||!text.includes('value="100"'))throw Error('default reservation');if(!text.includes('1000.00')||!text.includes('先拔枪再重新插枪'))throw Error('wallet or replug instructions');
-vm.runInContext("order={status:'failed',pile_no:'32010200000001',gun_no:1,note:'未检测到有效插枪，请先拔枪再重新插好枪（原因码5）',device_state:'unknown',device_online:true,latest:{},settlement_status:'not_charged'};page='charging';render()",context);
+vm.runInContext("device={availability:'account_busy',message:'您有一笔未结束的充电订单',active_order:{id:'own',pile_no:'32010200000001',gun_no:2}};render()",context);
+text=element('view').innerHTML;if(!text.includes('查看当前充电')||!text.includes('id="start" disabled')||!text.includes('刷新状态'))throw Error('account busy controls');
+element('currentOrder').onclick();if(!element('view').innerHTML.includes('2号枪'))throw Error('view own active order');
+vm.runInContext("page='device';device={availability:'occupied',message:'该充电枪正在使用中，请选择其他充电枪。'};render()",context);
+text=element('view').innerHTML;if(!text.includes('id="start" disabled')||text.includes('id="stop"')||text.includes('id="currentOrder"')||!text.includes('刷新状态'))throw Error('occupied controls');
+vm.runInContext("order={status:'failed' ,pile_no:'32010200000001',gun_no:1,note:'未检测到有效插枪，请先拔枪再重新插好枪（原因码5）',device_state:'unknown',device_online:true,latest:{},settlement_status:'not_charged'};page='charging';render()",context);
 text=element('view').innerHTML;if(!text.includes('原因码5')||!text.includes('未扣费'))throw Error('failure notice');
 if(!text.includes('id="retry"')||text.includes('id="stop"')||text.includes('不涉及真实付款')||!text.includes('设备连接：在线')||text.split('未扣费').length!==2)throw Error('failed order controls or connection');
 element('retry').onclick();
