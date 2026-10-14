@@ -436,11 +436,15 @@ def parse_body(ftype: int, body: bytes) -> dict:
 class Config:
     def __init__(self):
         # 计费模型：费率精确到五位小数（0x0A/0x58 帧），时段费率号 0尖1峰2平3谷
-        self.billing_model_no = "0100"
-        self.rates = {"jian": (80000, 40000), "feng": (80000, 40000),
-                      "ping": (80000, 40000), "gu": (80000, 40000)}  # (电费, 服务费)
+        self.billing_model_no = "0101"
+        # 教学费率，单位0.00001元/kWh；(电费, 服务费)，合计尖1.60/峰1.40/平1.20/谷0.80。
+        self.rates = {"jian": (120000, 40000), "feng": (100000, 40000),
+                      "ping": (80000, 40000), "gu": (40000, 40000)}
         self.loss_ratio = 0
-        self.periods = [2] * 48                   # 默认全部平费率
+        # 每项覆盖半小时，按充电桩本地时间：谷00-07、23-24；平07-10、12-14、21-23；
+        # 峰10-12、14-18；尖18-21。区间含起点不含终点。
+        self.periods = ([3] * 14 + [2] * 6 + [1] * 4 + [2] * 4
+                        + [1] * 8 + [0] * 6 + [2] * 4 + [3] * 2)
         self.billing_match = True                 # 0x06 验证结果：True=一致
         self.auth_pass = True                     # 0x32 鉴权结果：True=成功
         self.logic_card_no = "1000000000000000"
@@ -631,7 +635,7 @@ class PileSession:
     def h_05(self, seq, body):
         d = parse_body(0x05, body)
         log.info("  桩[%s] 计费模型验证: %s", self.pile_no, json.dumps(d))
-        result = 0x00 if CFG.billing_match else 0x01
+        result = 0x00 if CFG.billing_match and d.get("model_no") == CFG.billing_model_no else 0x01
         self.reply(seq, 0x06, self.pile_no_bcd
                    + str_to_bcd(CFG.billing_model_no, 2) + bytes([result]))
 

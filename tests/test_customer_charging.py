@@ -80,7 +80,9 @@ class Charging(unittest.TestCase):
             except m.ApiError as e: return e.status
         with ThreadPoolExecutor(2) as pool: results=list(pool.map(attempt,[1,2]))
         self.assertEqual(sum(isinstance(r,dict) for r in results),1);self.assertIn(409,results)
-        second=self.start(2,2);self.assertEqual(second['gun_no'],2)
+        # Either account can win the first gun; use the other account's unreserved wallet.
+        loser=1 if isinstance(results[1],dict) else 2
+        second=self.start(loser,2);self.assertEqual(second['gun_no'],2)
     def test_timeout_restart_and_late_reply(self):
         self.sock.reply=False
         order=self.start();self.assertEqual(order['status'],'unknown')
