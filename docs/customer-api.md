@@ -20,7 +20,7 @@
 availability: idle、mine、occupied、offline、fault、unknown。其他账号占用只返回占用提示，不返回用户、流水、金额或订单。
 订单状态: starting、charging、stopping、unknown、ending、finished、failed。starting/charging/stopping/unknown/ending均占用枪；只有明确启机失败或匹配交易上报释放。服务重启将starting/stopping改为unknown，不自动重新下发。实时充电报文须匹配流水、桩和枪才能更新本人订单；空闲报文不立即释放占用，等待最终交易记录。
 
-单位: 实时energy/amount及最终total_energy/total_amount按报文值除10000，charge_time分钟。计费模型尖峰平谷电费和服务费除100000（元/kWh）。下发启动额度为可用模拟余额与后台单次上限的较小值，单位分；不接受前端余额输入。
+单位: 实时energy/amount及最终total_energy/total_amount按报文值除10000，charge_time分钟。计费模型尖峰平谷电费和服务费除100000（元/kWh）。下发启动额度为可用余额与后台单次上限的较小值，单位分；不接受前端余额输入。
 
 账号4–32位字母数字下划线，大小写不敏感；密码8–128字符。问题ID movie、book、color、sport、disliked_food、first_phone_last4、respected_person、favorite_number。旧版密保问题已移除，注册和找回仅接受新版8项。安全答案允许1–128字符，支持单个数字或汉字。答案NFKC、去两端空白、大小写归一化，密码与答案独立加盐PBKDF2-SHA256。会话24小时，重置凭证5分钟且一次性。数据库包含原版账号表及新增orders表，清空联调数据库后须重新注册。
 
@@ -40,7 +40,7 @@ GET /api/charging-records，使用原后台管理员Bearer Token鉴权；客户C
 
 启动自动从现存transactions.json和已保存客户订单账单导入历史；新账单归档在customers.sqlite3的transaction_archive表，不再受JSON最近5000条限制。已经被删除或截断且没有其他副本的历史无法恢复。清空整个customers.sqlite3会同时清空客户订单和该归档。
 
-## 模拟钱包API
+## 钱包API
 
 - 客户GET /api/customer/wallet：返回本人的wallet，含balance_fen、reserved_fen、available_fen、simulated=true及最近50条ledger；金额为整数分。
 - 管理GET /api/customer-wallets?username=...&page=1&page_size=50：客户账户余额分页列表，管理员Token鉴权。
@@ -52,3 +52,11 @@ wallets保存余额；wallet_ledger保存不可重复的变动key、delta_fen、
 新订单启动预留额度；账单按 (total_amount + 50) // 100 转换为整数分结算（原单位0.0001元）。账单入档、订单完成、释放预留、钱包扣减和流水同事务提交。charge:<order_id>唯一，重复账单不重复扣；不同最终金额标review待核查。旧订单wallet_managed=0不追扣。未知结果订单保留预留，失败则释放预留、不扣费。
 
 注册赠送bonus，管理员充值admin_credit、扣费admin_debit，充电结算charging。settlement_status：pending、settled、not_charged、legacy、review。原因码5的订单note明确提醒先拔枪再重新插枪。
+
+## 启动失败提示与账号删除
+
+页面统一使用“钱包”“余额”，资金仍为数字模拟，未接真实支付。启动回复原因码0提示设备未提供原因；1核对桩号枪号；2当前枪已在充电；3设备故障联系检修；4设备离线检查网络；5先拔枪再重新插枪。未定义原因码显示原码并提示联系管理员，不混用其他报文的原因码定义。
+
+后台钱包列表新增“删除账号”，确认后POST /api/customer-accounts/delete，JSON username，使用管理员Token。进行中/未知/等待账单订单阻止删除。数据库对账号标记deleted=1，并清除密码、密保答案和问题，撤销客户会话和重置令牌，记录删除操作人和时间。账号从钱包管理列表隐藏，不能登录/找回/再次用同名注册。历史充电记录显示原账号（已删除），余额流水保留追溯。该功能不删除设备账单。
+
+更新ykc_platform_server.py、后台index.html和客户charge.html；不清空数据库，重启自动增加删除标记与审计表。26项Python测试和两端页面脚本检查通过。

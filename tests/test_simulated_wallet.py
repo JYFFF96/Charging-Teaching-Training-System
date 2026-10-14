@@ -80,6 +80,30 @@ class Wallet(unittest.TestCase):
         self.assertEqual(self.app.wallet_snapshot(1)['balance_fen'],-50)
         self.assertIn('余额为负',self.app.owned(order['id'],1)['note'])
 
+    def test_delete_account_revokes_access_retains_history_and_blocks_active(self):
+        token=self.app.issue(1)
+        order=self.start()
+        with self.assertRaises(m.ApiError):self.app.admin_delete_account({'username':'alice'},'admin_a')
+        self.app.transaction(self.invoice(order))
+        self.app.admin_delete_account({'username':'alice'},'admin_a')
+        self.assertIsNone(self.app.session(token))
+        with self.assertRaises(m.ApiError):self.app.issue(1)
+        with self.assertRaises(m.ApiError):self.app.admin_adjust(self.adjustment('credit','1.00'),'admin_a')
+        self.assertEqual(self.app.admin_wallets('/api/customer-wallets?username=alice')['total'],0)
+        records=self.app.admin_records('/api/charging-records?username=alice')
+        self.assertEqual(records['total'],1);self.assertIn('已删除',records['records'][0]['username'])
+        with self.app.connect() as c:
+            u=c.execute('SELECT * FROM users WHERE id=1').fetchone()
+            self.assertEqual(u['password'],'');self.assertEqual(u['answer'],'')
+        self.assertTrue(self.app.admin_delete_account({'username':'alice'},'admin_a')['already_deleted'])
+
+    def test_all_defined_start_failure_codes_have_actionable_messages(self):
+        for code,expected in [(0,'未提供'),(1,'设备编号'),(2,'已在充电'),(3,'设备故障'),(4,'设备离线'),(5,'先拔枪'),(99,'未定义')]:
+            self.sock.reply=False;self.telemetry(1);order=self.start()
+            self.app.start_reply({'pile_no':order['pile_no'],'gun_no':'01','serial_no':order['serial_no'],'start_result':0,'fail_reason':code})
+            row=self.app.owned(order['id'],1)
+            self.assertIn(expected,row['note']);self.assertIn('原因码 '+str(code),row['note'])
+
     def test_admin_wallet_http_permissions(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),m.make_api_handler('manager'))
         threading.Thread(target=server.serve_forever,daemon=True).start()

@@ -1224,7 +1224,7 @@ def make_api_handler(token, credentials=None):
             if p == "/api/customer-wallets/detail":
                 if not CUSTOMER_APP: return self._json({"error":"客户服务未启用"},503)
                 username=parse_qs(urlparse(self.path).query).get("username",[""])[0].strip().lower()
-                with CUSTOMER_APP.connect() as c: user=c.execute('SELECT id FROM users WHERE username=?',(username,)).fetchone()
+                with CUSTOMER_APP.connect() as c: user=c.execute('SELECT id FROM users WHERE username=? AND deleted=0',(username,)).fetchone()
                 if not user: return self._json({"error":"客户账号不存在"},404)
                 return self._json({"wallet":CUSTOMER_APP.wallet_snapshot(user['id'])})
             if p == "/api/customer-wallets":
@@ -1388,7 +1388,7 @@ def make_api_handler(token, credentials=None):
             if not self._auth_ok():
                 return self._json({"error": "未授权"}, 401)
             p = urlparse(self.path).path
-            if p == "/api/customer-wallets/adjust":
+            if p in ("/api/customer-wallets/adjust", "/api/customer-accounts/delete"):
                 if not CUSTOMER_APP: return self._json({"error": "客户服务未启用"}, 503)
                 try:
                     length=int(self.headers.get("Content-Length",0))
@@ -1398,6 +1398,7 @@ def make_api_handler(token, credentials=None):
                     auth=self.headers.get("Authorization", "")
                     credential=auth[7:] if auth.startswith("Bearer ") else parse_qs(urlparse(self.path).query).get("token",[""])[0]
                     with SESSION_LOCK: actor=ADMIN_SESSION_USERS.get(credential,"静态管理员")
+                    if p == "/api/customer-accounts/delete": return self._json(CUSTOMER_APP.admin_delete_account(payload,actor))
                     return self._json(CUSTOMER_APP.admin_adjust(payload,actor))
                 except ApiError as e: return self._json({"error":e.message},e.status)
                 except (ValueError,TypeError): return self._json({"error":"请求格式无效"},400)
@@ -1742,10 +1743,14 @@ class CustomerAccounts:
                 kind TEXT NOT NULL,note TEXT NOT NULL,actor TEXT NOT NULL,order_id TEXT,created REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS wallet_ledger_user ON wallet_ledger(user_id,id);
             ''')
+        with self.connect() as c:
+            if 'deleted' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:
+                c.execute('ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0')
+            c.execute('CREATE TABLE IF NOT EXISTS account_deletions(user_id INTEGER PRIMARY KEY,username TEXT NOT NULL,actor TEXT NOT NULL,created REAL NOT NULL)')
         os.chmod(self.db, 0o600)
         self.dummy = digest('dummy-account-timing-value')
         self.ensure_wallets()
-    def open_wallet(self,c,uid,reason='注册赠送模拟余额'):
+    def open_wallet(self,c,uid,reason='注册赠送余额'):
         if c.execute('SELECT 1 FROM wallets WHERE user_id=?',(uid,)).fetchone(): return
         c.execute('INSERT INTO wallets VALUES (?,?)',(uid,100000))
         c.execute('''INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,created)
@@ -1754,8 +1759,8 @@ class CustomerAccounts:
     def ensure_wallets(self):
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            for row in c.execute('SELECT id FROM users').fetchall():
-                self.open_wallet(c,row['id'],'首次开通模拟钱包赠送')
+            for row in c.execute('SELECT id FROM users WHERE deleted=0').fetchall():
+                self.open_wallet(c,row['id'],'首次开通钱包赠送')
     def reserved(self,c,uid):
         if not hasattr(self,'device'): return 0
         return c.execute("SELECT coalesce(sum(reserved_fen),0) FROM orders WHERE user_id=? AND status IN ('starting','charging','stopping','unknown','ending')",(uid,)).fetchone()[0]
@@ -1772,14 +1777,30 @@ class CustomerAccounts:
         try: page=max(1,int(q.get('page',['1'])[0]));size=min(100,max(1,int(q.get('page_size',['50'])[0])))
         except ValueError: raise ApiError(400,'分页参数无效')
         with self.connect() as c:
-            count=c.execute("SELECT count(*) FROM users WHERE instr(lower(username),lower(?))>0",(username,)).fetchone()[0]
+            count=c.execute("SELECT count(*) FROM users WHERE deleted=0 AND instr(lower(username),lower(?))>0",(username,)).fetchone()[0]
             pages=max(1,(count+size-1)//size);page=min(page,pages)
             rows=c.execute('''SELECT u.id,u.username,w.balance_fen FROM users u JOIN wallets w ON w.user_id=u.id
-                WHERE instr(lower(u.username),lower(?))>0 ORDER BY u.id DESC LIMIT ? OFFSET ?''',(username,size,(page-1)*size)).fetchall()
+                WHERE u.deleted=0 AND instr(lower(u.username),lower(?))>0 ORDER BY u.id DESC LIMIT ? OFFSET ?''',(username,size,(page-1)*size)).fetchall()
             users=[]
             for row in rows:
                 d=dict(row);d['reserved_fen']=self.reserved(c,row['id']);d['available_fen']=row['balance_fen']-d['reserved_fen'];users.append(d)
         return {'users':users,'page':page,'pages':pages,'total':count,'simulated':True}
+    def admin_delete_account(self,p,actor):
+        username=p.get('username')
+        if not isinstance(username,str) or not re.fullmatch('[A-Za-z0-9_]{4,32}',username): raise ApiError(400,'客户账号无效')
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            user=c.execute('SELECT id,deleted FROM users WHERE username=?',(username.lower(),)).fetchone()
+            if not user: raise ApiError(404,'账号不存在')
+            if user['deleted']: return {'ok':True,'already_deleted':True}
+            uid=user['id']
+            if hasattr(self,'device') and c.execute("SELECT 1 FROM orders WHERE user_id=? AND status IN ('starting','charging','stopping','unknown','ending') LIMIT 1",(uid,)).fetchone():
+                raise ApiError(409,'该账号有进行中或结果待确认的订单，不能删除；请先结束并核实订单')
+            c.execute("UPDATE users SET deleted=1,password='',answer='',question='' WHERE id=?",(uid,))
+            c.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+            c.execute('DELETE FROM resets WHERE user_id=?',(uid,))
+            c.execute('INSERT INTO account_deletions VALUES (?,?,?,?)',(uid,username.lower(),actor,time.time()))
+        return {'ok':True,'already_deleted':False}
     def admin_adjust(self,p,actor):
         username=p.get('username');action=p.get('action');amount=p.get('amount');rid=p.get('request_id');note=p.get('note')
         if not isinstance(username,str) or not re.fullmatch('[A-Za-z0-9_]{4,32}',username): raise ApiError(400,'客户账号无效')
@@ -1794,7 +1815,7 @@ class CustomerAccounts:
         note=note.strip();delta=fen if action=='credit' else -fen;key='admin:'+actor+':'+rid
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            u=c.execute('SELECT id FROM users WHERE username=?',(username.lower(),)).fetchone()
+            u=c.execute('SELECT id FROM users WHERE username=? AND deleted=0',(username.lower(),)).fetchone()
             if not u: raise ApiError(404,'客户账号不存在')
             uid=u['id'];old=c.execute('SELECT * FROM wallet_ledger WHERE entry_key=?',(key,)).fetchone()
             if old:
@@ -1804,7 +1825,7 @@ class CustomerAccounts:
                 row=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
                 if not row: raise ApiError(404,'钱包不存在')
                 before=row['balance_fen']
-                if delta<0 and before-self.reserved(c,uid)<fen: raise ApiError(409,'可用模拟余额不足；进行中订单的预留额度不能扣除')
+                if delta<0 and before-self.reserved(c,uid)<fen: raise ApiError(409,'可用余额不足；进行中订单的预留额度不能扣除')
                 after=before+delta
                 if abs(after)>9000000000000000: raise ApiError(400,'余额超出支持范围')
                 c.execute('UPDATE wallets SET balance_fen=? WHERE user_id=?',(after,uid))
@@ -1829,10 +1850,11 @@ class CustomerAccounts:
         return True
     def session(self, token):
         with self.connect() as c:
-            return c.execute('SELECT u.id,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?', (token_hash(token),time.time())).fetchone()
+            return c.execute('SELECT u.id,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.deleted=0', (token_hash(token),time.time())).fetchone()
     def issue(self, user_id):
         token = secrets.token_urlsafe(32)
         with self.connect() as c:
+            if not c.execute('SELECT 1 FROM users WHERE id=? AND deleted=0',(user_id,)).fetchone(): raise ApiError(401,'账号已删除或不存在')
             c.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
             c.execute('INSERT INTO sessions VALUES (?,?,?)', (token_hash(token),user_id,time.time()+86400))
         return token
@@ -1932,7 +1954,7 @@ def handler_for(app):
                 action=path.rsplit('/',1)[-1]
                 if not app.limit([action+':account:'+username,action+':ip:'+ip],5 if action!='register' else 10):
                     raise ApiError(429,'尝试次数过多，请10分钟后重试')
-                with app.connect() as c: u=c.execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
+                with app.connect() as c: u=c.execute('SELECT * FROM users WHERE username=? AND deleted=0',(username,)).fetchone()
                 if action=='register':
                     pwd=self.password(payload.get('password'))
                     question,answer=self.answer(payload)
@@ -2062,7 +2084,7 @@ class ChargingApp(CustomerAccounts):
                 terms.append('substr(record_time,1,10)'+operator+'?');args.append(value(key))
         if value('date_from') and value('date_to') and value('date_from')>value('date_to'):
             raise ApiError(400,'开始日期不能晚于结束日期')
-        union='''SELECT o.id AS order_id,o.user_id,u.username,o.pile_no,o.gun_no,o.serial_no,
+        union='''SELECT o.id AS order_id,o.user_id,CASE WHEN u.deleted=1 THEN u.username||'（已删除）' ELSE u.username END AS username,o.pile_no,o.gun_no,o.serial_no,
             o.status,'customer' AS source,o.created AS created_at,o.updated AS updated_at,o.note,
             t.payload AS transaction_json,t.start_time,t.end_time,t.energy_raw,t.amount_raw,
             CASE WHEN coalesce(t.start_time,'')<>'' THEN t.start_time ELSE datetime(o.created,'unixepoch','localtime') END AS record_time
@@ -2177,10 +2199,11 @@ class ChargingApp(CustomerAccounts):
                 try:
                     with self.connect() as c:
                         c.execute('BEGIN IMMEDIATE')
+                        if not c.execute('SELECT 1 FROM users WHERE id=? AND deleted=0',(uid,)).fetchone(): raise ApiError(401,'账号已删除或不存在')
                         wallet=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
                         if not wallet: raise ApiError(404,'客户钱包不存在')
                         available=wallet['balance_fen']-self.reserved(c,uid)
-                        if available<=0: raise ApiError(409,'可用模拟余额不足，请联系管理员充值')
+                        if available<=0: raise ApiError(409,'可用余额不足，请联系管理员充值')
                         reserve=min(available,self.balance_fen)
                         c.execute('INSERT INTO orders(id,user_id,pile_no,gun_no,serial_no,status,created,updated,reserved_fen,wallet_managed,settlement_status) VALUES (?,?,?,?,?,?,?,?,?,1,?)',
                                   (oid,uid,pile,gun,key,'starting',now,now,reserve,'pending'))
@@ -2228,9 +2251,14 @@ class ChargingApp(CustomerAccounts):
     def start_reply(self,d):
         success=d.get('start_result')==1
         code=d.get('fail_reason')
-        reasons={1:'设备编号不匹配',2:'该枪已在充电',3:'设备故障',4:'设备离线',
-                 5:'未检测到有效插枪。上一轮充电结束后，必须先拔枪，再重新插好枪后启动'}
-        note='' if success else '启动失败：'+reasons.get(code,'设备拒绝启动')+'（原因码 '+str(code)+'）'
+        reasons={
+            0:'设备未提供失败原因，请检查设备状态后重试；持续失败请联系管理员',
+            1:'设备编号不匹配，请确认二维码对应的桩号和枪号，联系管理员核对设备配置',
+            2:'该枪已在充电，请查看本人进行中的订单；其他用户使用时请等待或更换充电枪',
+            3:'设备故障，请停止重试，更换充电枪或联系管理员检修',
+            4:'设备离线，请等待设备恢复连接，或联系管理员检查网络',
+            5:'未检测到有效插枪。上一轮充电结束后，必须先拔枪，再重新插好枪后启动'}
+        note='' if success else '启动失败：'+reasons.get(code,'设备返回未定义的启动失败原因，请联系管理员并提供原因码，勿反复启动')+'（原因码 '+str(code)+'）'
         with self.connect() as c:
             c.execute("UPDATE orders SET status=?,note=?,fail_reason=?,reserved_fen=CASE WHEN ? THEN reserved_fen ELSE 0 END,settlement_status=CASE WHEN ? THEN settlement_status ELSE 'not_charged' END,updated=? WHERE serial_no=? AND pile_no=? AND gun_no=? AND status IN ('starting','unknown')",
                       ('charging' if success else 'failed',note,None if success else code,success,success,time.time(),d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0'))))
@@ -2254,21 +2282,21 @@ class ChargingApp(CustomerAccounts):
             row=c.execute('SELECT * FROM orders WHERE serial_no=? AND pile_no=? AND gun_no=?',
                           (d.get('serial_no'),d.get('pile_no'),int(d.get('gun_no','0')))).fetchone()
             if not row: return  # Unassociated device transactions never charge an arbitrary customer.
-            settlement=row['settlement_status'];settled=row['settled_fen'];note='设备交易已上报；历史订单不追扣模拟余额'
+            settlement=row['settlement_status'];settled=row['settled_fen'];note='设备交易已上报；历史订单不追扣余额'
             if row['wallet_managed']:
                 key='charge:'+row['id'];entry=c.execute('SELECT * FROM wallet_ledger WHERE entry_key=?',(key,)).fetchone()
                 if entry:
                     settled=-entry['delta_fen']
                     settlement='settled' if settled==fen else 'review'
-                    note='模拟扣费已完成' if settled==fen else '重复账单金额发生变化，未重复扣费，请管理员核查'
+                    note='扣费已完成' if settled==fen else '重复账单金额发生变化，未重复扣费，请管理员核查'
                 else:
                     w=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(row['user_id'],)).fetchone()
                     if not w: raise ValueError('账单客户钱包不存在')
                     before=w['balance_fen'];after=before-fen
                     c.execute('UPDATE wallets SET balance_fen=? WHERE user_id=?',(after,row['user_id']))
                     c.execute("""INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,order_id,created)
-                        VALUES (?,?,?,?,?,'charging',?,'device',?,?)""",(key,row['user_id'],-fen,before,after,'按设备最终账单模拟扣费',row['id'],time.time()))
-                    settled=fen;settlement='settled';note='模拟扣费已完成' if after>=0 else '模拟扣费已完成，余额为负，请联系管理员补充模拟余额'
+                        VALUES (?,?,?,?,?,'charging',?,'device',?,?)""",(key,row['user_id'],-fen,before,after,'按设备最终账单扣费',row['id'],time.time()))
+                    settled=fen;settlement='settled';note='扣费已完成' if after>=0 else '扣费已完成，余额为负，请联系管理员补充余额'
             c.execute("UPDATE orders SET status='finished',note=?,reserved_fen=0,settled_fen=?,settlement_status=?,transaction_json=?,updated=? WHERE id=?",
                       (note,settled,settlement,json.dumps(d,ensure_ascii=False),time.time(),row['id']))
 

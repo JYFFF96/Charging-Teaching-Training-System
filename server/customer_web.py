@@ -51,10 +51,14 @@ class App:
                 kind TEXT NOT NULL,note TEXT NOT NULL,actor TEXT NOT NULL,order_id TEXT,created REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS wallet_ledger_user ON wallet_ledger(user_id,id);
             ''')
+        with self.connect() as c:
+            if 'deleted' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:
+                c.execute('ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0')
+            c.execute('CREATE TABLE IF NOT EXISTS account_deletions(user_id INTEGER PRIMARY KEY,username TEXT NOT NULL,actor TEXT NOT NULL,created REAL NOT NULL)')
         os.chmod(self.db, 0o600)
         self.dummy = digest('dummy-account-timing-value')
         self.ensure_wallets()
-    def open_wallet(self,c,uid,reason='注册赠送模拟余额'):
+    def open_wallet(self,c,uid,reason='注册赠送余额'):
         if c.execute('SELECT 1 FROM wallets WHERE user_id=?',(uid,)).fetchone(): return
         c.execute('INSERT INTO wallets VALUES (?,?)',(uid,100000))
         c.execute('''INSERT INTO wallet_ledger(entry_key,user_id,delta_fen,before_fen,after_fen,kind,note,actor,created)
@@ -63,8 +67,8 @@ class App:
     def ensure_wallets(self):
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            for row in c.execute('SELECT id FROM users').fetchall():
-                self.open_wallet(c,row['id'],'首次开通模拟钱包赠送')
+            for row in c.execute('SELECT id FROM users WHERE deleted=0').fetchall():
+                self.open_wallet(c,row['id'],'首次开通钱包赠送')
     def reserved(self,c,uid):
         if not hasattr(self,'device'): return 0
         return c.execute("SELECT coalesce(sum(reserved_fen),0) FROM orders WHERE user_id=? AND status IN ('starting','charging','stopping','unknown','ending')",(uid,)).fetchone()[0]
@@ -81,14 +85,30 @@ class App:
         try: page=max(1,int(q.get('page',['1'])[0]));size=min(100,max(1,int(q.get('page_size',['50'])[0])))
         except ValueError: raise ApiError(400,'分页参数无效')
         with self.connect() as c:
-            count=c.execute("SELECT count(*) FROM users WHERE instr(lower(username),lower(?))>0",(username,)).fetchone()[0]
+            count=c.execute("SELECT count(*) FROM users WHERE deleted=0 AND instr(lower(username),lower(?))>0",(username,)).fetchone()[0]
             pages=max(1,(count+size-1)//size);page=min(page,pages)
             rows=c.execute('''SELECT u.id,u.username,w.balance_fen FROM users u JOIN wallets w ON w.user_id=u.id
-                WHERE instr(lower(u.username),lower(?))>0 ORDER BY u.id DESC LIMIT ? OFFSET ?''',(username,size,(page-1)*size)).fetchall()
+                WHERE u.deleted=0 AND instr(lower(u.username),lower(?))>0 ORDER BY u.id DESC LIMIT ? OFFSET ?''',(username,size,(page-1)*size)).fetchall()
             users=[]
             for row in rows:
                 d=dict(row);d['reserved_fen']=self.reserved(c,row['id']);d['available_fen']=row['balance_fen']-d['reserved_fen'];users.append(d)
         return {'users':users,'page':page,'pages':pages,'total':count,'simulated':True}
+    def admin_delete_account(self,p,actor):
+        username=p.get('username')
+        if not isinstance(username,str) or not re.fullmatch('[A-Za-z0-9_]{4,32}',username): raise ApiError(400,'客户账号无效')
+        with self.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            user=c.execute('SELECT id,deleted FROM users WHERE username=?',(username.lower(),)).fetchone()
+            if not user: raise ApiError(404,'账号不存在')
+            if user['deleted']: return {'ok':True,'already_deleted':True}
+            uid=user['id']
+            if hasattr(self,'device') and c.execute("SELECT 1 FROM orders WHERE user_id=? AND status IN ('starting','charging','stopping','unknown','ending') LIMIT 1",(uid,)).fetchone():
+                raise ApiError(409,'该账号有进行中或结果待确认的订单，不能删除；请先结束并核实订单')
+            c.execute("UPDATE users SET deleted=1,password='',answer='',question='' WHERE id=?",(uid,))
+            c.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+            c.execute('DELETE FROM resets WHERE user_id=?',(uid,))
+            c.execute('INSERT INTO account_deletions VALUES (?,?,?,?)',(uid,username.lower(),actor,time.time()))
+        return {'ok':True,'already_deleted':False}
     def admin_adjust(self,p,actor):
         username=p.get('username');action=p.get('action');amount=p.get('amount');rid=p.get('request_id');note=p.get('note')
         if not isinstance(username,str) or not re.fullmatch('[A-Za-z0-9_]{4,32}',username): raise ApiError(400,'客户账号无效')
@@ -103,7 +123,7 @@ class App:
         note=note.strip();delta=fen if action=='credit' else -fen;key='admin:'+actor+':'+rid
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            u=c.execute('SELECT id FROM users WHERE username=?',(username.lower(),)).fetchone()
+            u=c.execute('SELECT id FROM users WHERE username=? AND deleted=0',(username.lower(),)).fetchone()
             if not u: raise ApiError(404,'客户账号不存在')
             uid=u['id'];old=c.execute('SELECT * FROM wallet_ledger WHERE entry_key=?',(key,)).fetchone()
             if old:
@@ -113,7 +133,7 @@ class App:
                 row=c.execute('SELECT balance_fen FROM wallets WHERE user_id=?',(uid,)).fetchone()
                 if not row: raise ApiError(404,'钱包不存在')
                 before=row['balance_fen']
-                if delta<0 and before-self.reserved(c,uid)<fen: raise ApiError(409,'可用模拟余额不足；进行中订单的预留额度不能扣除')
+                if delta<0 and before-self.reserved(c,uid)<fen: raise ApiError(409,'可用余额不足；进行中订单的预留额度不能扣除')
                 after=before+delta
                 if abs(after)>9000000000000000: raise ApiError(400,'余额超出支持范围')
                 c.execute('UPDATE wallets SET balance_fen=? WHERE user_id=?',(after,uid))
@@ -138,10 +158,11 @@ class App:
         return True
     def session(self, token):
         with self.connect() as c:
-            return c.execute('SELECT u.id,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?', (token_hash(token),time.time())).fetchone()
+            return c.execute('SELECT u.id,u.username FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.deleted=0', (token_hash(token),time.time())).fetchone()
     def issue(self, user_id):
         token = secrets.token_urlsafe(32)
         with self.connect() as c:
+            if not c.execute('SELECT 1 FROM users WHERE id=? AND deleted=0',(user_id,)).fetchone(): raise ApiError(401,'账号已删除或不存在')
             c.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
             c.execute('INSERT INTO sessions VALUES (?,?,?)', (token_hash(token),user_id,time.time()+86400))
         return token
@@ -229,7 +250,7 @@ def handler_for(app):
                 action=path.rsplit('/',1)[-1]
                 if not app.limit([action+':account:'+username,action+':ip:'+ip],5 if action!='register' else 10):
                     raise ApiError(429,'尝试次数过多，请10分钟后重试')
-                with app.connect() as c: u=c.execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
+                with app.connect() as c: u=c.execute('SELECT * FROM users WHERE username=? AND deleted=0',(username,)).fetchone()
                 if action=='register':
                     pwd=self.password(payload.get('password'))
                     question,answer=self.answer(payload)
