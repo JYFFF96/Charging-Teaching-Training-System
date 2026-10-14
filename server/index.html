@@ -189,9 +189,9 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
         <div class="cd-row">
           <div class="cd-card c1"><div class="t">充电电量(度)</div><div class="v" id="cdEnergy">0.0000</div></div>
           <div class="cd-card c2"><div class="t">充电次数(单)</div><div class="v" id="cdCount">0</div></div>
-          <div class="cd-card c3"><div class="t">订单应收金额(元)</div><div class="v" id="cdAmount">0.0000</div></div>
-          <div class="cd-card c4"><div class="t">订单应收电费(元)</div><div class="v" id="cdElec">0.0000</div></div>
-          <div class="cd-card c5"><div class="t">订单应收服务费(元)</div><div class="v" id="cdSvc">0.0000</div></div>
+          <div class="cd-card c3"><div class="t">订单应收金额(元)</div><div class="v" id="cdAmount">0.00</div></div>
+          <div class="cd-card c4"><div class="t">订单应收电费(元)</div><div class="v" id="cdElec">0.00</div></div>
+          <div class="cd-card c5"><div class="t">订单应收服务费(元)</div><div class="v" id="cdSvc">0.00</div></div>
         </div>
       </div>
       <!-- 实时状态 -->
@@ -350,7 +350,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
     <label>枪号<input id="sGun" value="1"></label>
     <label>逻辑卡号<input id="sLogic" value="1000000000000000"></label>
     <label>物理卡号(16进制,可填0)<input id="sPhys" value="0000000000000000"></label>
-    <label>账户余额（元）<input id="sBalance" value="1000.00"></label>
+    <label>账户余额（元）<input id="sBalance" type="number" min="0.01" step="0.01" max="42949672.95" value="1000.00"></label>
     <div class="btns">
       <button id="sCancel">取消</button>
       <button class="primary" id="sOk">下发启机指令 (0x34)</button>
@@ -533,7 +533,7 @@ function updateRow(no, d){
   tr.querySelector(".pwr").textContent=(vol*cur/1000).toFixed(2);
   tr.querySelector(".soc").textContent=d.soc??"--";
   tr.querySelector(".kwh").textContent=(d.energy/10000).toFixed(2);
-  tr.querySelector(".amt").textContent=(d.amount/10000).toFixed(2);
+  tr.querySelector(".amt").textContent=rawMoney(d.amount);
   const gh=c.gunHealth[d.gun_no||"01"];
   tr.querySelector(".ghealth").innerHTML=`<span class="tag ${gh?"t-red":"t-green"}">${gh?"故障":"正常"}</span>`;
   // 设备卡
@@ -547,7 +547,7 @@ function updateRow(no, d){
   dv.querySelector(".dbt").innerHTML=((d.batt_max_temp!=null&&st===3)?(d.batt_max_temp-50):"--")+"<small> ℃</small>";
   dv.querySelector(".dct").innerHTML=(d.charge_time??0)+"<small> min</small>";
   dv.querySelector(".dkwh").innerHTML=(d.energy/10000).toFixed(2)+"<small> kWh</small>";
-  dv.querySelector(".damt").innerHTML=(d.amount/10000).toFixed(2)+"<small> 元</small>";
+  dv.querySelector(".damt").innerHTML=rawMoney(d.amount)+"<small> 元</small>";
   const g=d.gun_no||"01";
   (c.hist[g]=c.hist[g]||[]).push(vol*cur/1000);
   if(c.hist[g].length>90) c.hist[g].shift();
@@ -596,7 +596,7 @@ let recordPage=1,recordPages=1,recordFilters={},recordRequest=0,recordTimer;
 const ORDER_STATUS={starting:'正在启动',charging:'充电中',stopping:'正在停止',unknown:'结果待确认',ending:'等待账单',finished:'已结束',failed:'启动失败'};
 function recordRow(d){
  const tx=d.transaction||{},flagMap={1:'APP',2:'刷卡',4:'离线卡',5:'VIN'};
- const amount=d.amount==null?'—':Number(d.amount).toFixed(4)+(d.amount_final?'':'（实时）');
+ const amount=d.amount==null?'—':Number(d.amount).toFixed(2)+(d.amount_final?'':'（实时）');
  const values=[d.username||(d.user_id?'已删除账号':'未关联用户'),ORDER_STATUS[d.status]||d.status,d.serial_no,d.pile_no,String(d.gun_no).padStart(2,'0'),d.start_time||d.record_time,d.end_time||'—',d.energy==null?'—':Number(d.energy).toFixed(4),tx.total_loss_energy==null?'—':(tx.total_loss_energy/10000).toFixed(4),amount,tx.vin||'—',flagMap[tx.trade_flag]||tx.trade_flag||'—',tx.stop_reason??'—',d.source==='customer'?'客户订单':'桩交易',d.note||'—'];
  const row=document.createElement('tr');for(const value of values){const cell=document.createElement('td');cell.textContent=value??'—';row.appendChild(cell);}return row;
 }
@@ -610,7 +610,7 @@ async function initTx(){
  recordPage=data.page;recordPages=data.pages;const tb=$('#txTable tbody');tb.replaceChildren();
  if(!data.records.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=15;cell.className='empty';cell.textContent='没有符合条件的记录';row.appendChild(cell);tb.appendChild(row);}
  else for(const record of data.records)tb.appendChild(recordRow(record));
- $('#recordSummary').textContent=`符合条件 ${data.total} 条 · 最终账单电量 ${Number(data.summary.final_energy).toFixed(4)} kWh · 最终账单金额 ${Number(data.summary.final_amount).toFixed(4)} 元（不含进行中估算，未代表支付到账）`;
+ $('#recordSummary').textContent=`符合条件 ${data.total} 条 · 最终账单电量 ${Number(data.summary.final_energy).toFixed(4)} kWh · 最终账单金额 ${Number(data.summary.final_amount).toFixed(2)} 元（不含进行中估算，未代表支付到账）`;
  $('#recordPage').textContent=`第 ${recordPage} / ${recordPages} 页`;$('#recordPrev').disabled=recordPage<=1;$('#recordNext').disabled=recordPage>=recordPages;$('#recordError').textContent='';
  }catch(error){if(request===recordRequest)$('#recordError').textContent='读取失败：'+error.message;}
 }
@@ -625,6 +625,7 @@ setInterval(()=>{if(TOKEN&&!document.hidden&&$('#page-orders').classList.contain
 
 /* ---------- 钱包管理 ---------- */
 let walletPage=1,walletPages=1,walletSearch='',walletRequest=0,walletOperation=null;
+function rawMoney(raw){return walletMoney(Math.floor((Number(raw||0)+50)/100));}
 function walletMoney(value){return (Number(value||0)/100).toFixed(2);}
 async function adminWalletFetch(path,body){
  const options={headers:{Authorization:'Bearer '+TOKEN}};
@@ -679,7 +680,7 @@ $("#sOk").onclick=async()=>{
   toast("启机指令已下发，等待充电桩回复(最长80s)…");
   try{
     const res=await api(`/api/piles/${no}/start`,{gun_no:+$("#sGun").value,
-      logic_card_no:$("#sLogic").value, phys_card_no:$("#sPhys").value, balance:+$("#sBalance").value});
+      logic_card_no:$("#sLogic").value, phys_card_no:$("#sPhys").value, balance:$("#sBalance").value});
     if(res.ok){ logline("l-ok",`桩 ${no} 启动成功 ✔ ${JSON.stringify(res.reply)}`); toast("✔ 启动成功"); }
     else{ logline("l-err",`桩 ${no} 启动失败: ${res.error||JSON.stringify(res.reply)}`); toast("✘ "+(res.error||"启动失败"),false); }
   }catch(e){ toast("请求失败: "+e,false); }
@@ -917,7 +918,7 @@ function translateFrame(m){
     case 0x05: return `${arrow} | 充电桩：${no} 校验计费模型（本地模型号 ${d.model_no||"--"}）`;
     case 0x06: return `${arrow} | 充电桩：${no} 计费模型${d.result===0?"一致":"不一致"}（平台模型号 ${d.model_no||"--"}）`;
     case 0x13: return `${arrow} | 充电桩：${no}，充电枪：${gun}，状态：${d.status} ${stTxt||""}`+
-      (d.status===3?`，输出 ${(d.out_voltage/10).toFixed(1)}V/${(d.out_current/10).toFixed(1)}A，SOC ${d.soc}%，已充 ${(d.energy/10000).toFixed(2)}度 / ${(d.amount/10000).toFixed(2)}元，时长 ${d.charge_time}分钟`:"");
+      (d.status===3?`，输出 ${(d.out_voltage/10).toFixed(1)}V/${(d.out_current/10).toFixed(1)}A，SOC ${d.soc}%，已充 ${(d.energy/10000).toFixed(2)}度 / ${rawMoney(d.amount)}元，时长 ${d.charge_time}分钟`:"");
     case 0x15: return `${arrow} | 充电桩：${no}，充电枪：${gun} 车辆接入：VIN ${d.vin||"--"}，${BATT_TYPE[d.batt_type]||d.batt_type||"--"}，容量 ${((d.batt_capacity||0)/10).toFixed(1)}Ah，电压 ${((d.batt_total_vol||0)/10).toFixed(1)}V`;
     case 0x17: return `${arrow} | 充电桩：${no}，充电枪：${gun} BMS参数：单体上限 ${((d.max_cell_vol||0)/100).toFixed(2)}V，电池能量 ${((d.batt_energy||0)/10).toFixed(1)}kWh，SOC ${((d.soc||0)/10).toFixed(1)}%`;
     case 0x21: return `${arrow} | 充电桩：${no}，充电枪：${gun} 充电机中止充电（原因码 ${d.charger_stop_reason}，故障码 ${d.charger_stop_fault}，错误码 ${d.charger_stop_error}）`;
@@ -925,7 +926,7 @@ function translateFrame(m){
     case 0x25: return `${arrow} | 充电桩：${no}，充电枪：${gun} 电池温度 ${(d.min_temp||0)-50}~${(d.max_temp||0)-50}℃`;
     case 0x33: return `${arrow} | 充电桩：${no}，充电枪：${gun} 远程启动${d.start_result===1?"成功":"失败"}${d.start_result===1?"":"（原因码 "+d.fail_reason+"）"}`;
     case 0x35: return `${arrow} | 充电桩：${no}，充电枪：${gun} 远程停机${d.stop_result===1?"成功":"失败"}`;
-    case 0x3B: return `${arrow} | 充电桩：${no}，充电枪：${gun} 生成账单：${d.start_time||"--"} ~ ${d.end_time||"--"}，共 ${(d.total_energy/10000).toFixed(2)}度，合计 ${(d.total_amount/10000).toFixed(2)}元，VIN ${d.vin||"--"}，启动方式 ${{1:"APP",2:"刷卡",4:"离线卡",5:"VIN"}[d.trade_flag]||d.trade_flag}，停止原因 ${STOP_REASON[d.stop_reason]||d.stop_reason}`;
+    case 0x3B: return `${arrow} | 充电桩：${no}，充电枪：${gun} 生成账单：${d.start_time||"--"} ~ ${d.end_time||"--"}，共 ${(d.total_energy/10000).toFixed(2)}度，合计 ${rawMoney(d.total_amount)}元，VIN ${d.vin||"--"}，启动方式 ${{1:"APP",2:"刷卡",4:"离线卡",5:"VIN"}[d.trade_flag]||d.trade_flag}，停止原因 ${STOP_REASON[d.stop_reason]||d.stop_reason}`;
     case 0x51: return `${arrow} | 充电桩：${no} 工作参数设置${d.result===1?"成功":"失败"}`;
     case 0x55: return `${arrow} | 充电桩：${no} 对时完成，桩时间 ${d.current_time||"--"}`;
     case 0x57: return `${arrow} | 充电桩：${no} 计费模型设置${d.result===1?"成功":"失败"}`;
@@ -1083,9 +1084,9 @@ async function refreshStats(){
     const r=await api("/api/stats"+(qs0?"?"+qs0:""));
     $("#cdEnergy").textContent=r.tx_energy.toFixed(4);
     $("#cdCount").textContent=r.tx_count;
-    $("#cdAmount").textContent=r.tx_amount.toFixed(4);
-    $("#cdElec").textContent=r.elec_amount.toFixed(4);
-    $("#cdSvc").textContent=r.svc_amount.toFixed(4);
+    $("#cdAmount").textContent=r.tx_amount.toFixed(2);
+    $("#cdElec").textContent=r.elec_amount.toFixed(2);
+    $("#cdSvc").textContent=r.svc_amount.toFixed(2);
     txCount=r.tx_count; txAmount=r.tx_amount;
     const t=await api("/api/stats/trend?days=30"+(curStation?"&station="+encodeURIComponent(curStation):""));
     drawLineChart($("#trendChart"), t.days.map(x=>x.date), [

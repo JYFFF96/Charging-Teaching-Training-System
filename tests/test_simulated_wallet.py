@@ -123,6 +123,16 @@ class Wallet(unittest.TestCase):
         self.assertIsNone(self.app.active(fixture.PILE,1))
         self.assertEqual(self.app.wallet_snapshot(1)['balance_fen'],100000)
 
+    def test_money_rounding_to_fen_and_record_summary(self):
+        self.assertEqual(m.amount_fen(49),0)
+        self.assertEqual(m.amount_fen(50),1)
+        self.assertEqual(m.amount_fen(10050),101)
+        for index in range(2):
+            self.app.transaction({'pile_no':fixture.PILE,'gun_no':'01','serial_no':str(index+80).zfill(32),'total_amount':10050,'total_energy':0})
+        records=self.app.admin_records('/api/charging-records')
+        self.assertEqual(records['summary']['final_amount'],2.02)
+        self.assertTrue(all(row['amount']==1.01 for row in records['records']))
+
     def test_admin_wallet_http_permissions(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),m.make_api_handler('manager'))
         threading.Thread(target=server.serve_forever,daemon=True).start()

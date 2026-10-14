@@ -9,7 +9,7 @@ let text=element('view').innerHTML;if(!text.includes('id="reserveAmount"')||!tex
 vm.runInContext("order={status:'failed',pile_no:'32010200000001',gun_no:1,note:'未检测到有效插枪，请先拔枪再重新插好枪（原因码5）',device_state:'idle',latest:{},settlement_status:'not_charged'};page='charging';render()",context);
 text=element('view').innerHTML;if(!text.includes('原因码5')||!text.includes('未扣费'))throw Error('failure notice');
 vm.runInContext("order.status='finished';order.settlement_status='settled';order.settled_fen=1235;render()",context);
-if(!element('view').innerHTML.includes('已扣费：12.35'))throw Error('settled amount');
+if(!element('view').innerHTML.includes('已扣费：12.35'))throw Error('settled amount');vm.runInContext("order.transaction={total_amount:10050,total_energy:700};render()",context);if(!element('view').innerHTML.includes('<strong>1.01</strong>'))throw Error('amount cent rounding');
 vm.runInContext("wallet.ledger=[{kind:'admin_credit',delta_fen:100,after_fen:100100,created:1,note:'<img src=x onerror=alert(1)>'}];page='wallet';render()",context);
 text=element('view').innerHTML;if(!text.includes('&lt;img')||text.includes('<img src=x'))throw Error('unsafe ledger rendering');console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});

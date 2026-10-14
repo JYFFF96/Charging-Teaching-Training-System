@@ -140,6 +140,11 @@ def cp56time2a_encode(dt: datetime = None) -> bytes:
         (dt.year - 2000) & 0x7F])
 
 
+def amount_fen(raw):
+    """Protocol amount (0.0001 yuan) -> integer fen, half up."""
+    return (int(raw) + 50) // 100
+
+
 def bin_le(data: bytes) -> int:        # BIN 码，低位在前
     return int.from_bytes(data, "little")
 
@@ -1244,7 +1249,7 @@ def make_api_handler(token, credentials=None):
                 q = parse_qs(urlparse(self.path).query)
                 tx = _tx_filter(q.get("station", [None])[0] or None,
                                 q.get("day", [None])[0] or None)
-                amount = sum(int(t.get("total_amount", 0)) for t in tx) / 10000
+                amount = sum(amount_fen(t.get("total_amount", 0)) for t in tx) / 100
                 re_, rs_ = _elec_svc_ratio()
                 return self._json({
                     "tx_count": len(tx),
@@ -1266,7 +1271,7 @@ def make_api_handler(token, credentials=None):
                         continue
                     b = buckets.setdefault(d, {"energy": 0.0, "count": 0, "amount": 0.0})
                     b["energy"] += int(t.get("total_energy", 0)) / 10000
-                    b["amount"] += int(t.get("total_amount", 0)) / 10000
+                    b["amount"] += amount_fen(t.get("total_amount", 0)) / 100
                     b["count"] += 1
                 out = []
                 for i in range(days - 1, -1, -1):
@@ -1284,7 +1289,7 @@ def make_api_handler(token, credentials=None):
                         continue
                     b = buckets[int(ts[11:13])]
                     b["energy"] += int(t.get("total_energy", 0)) / 10000
-                    b["amount"] += int(t.get("total_amount", 0)) / 10000
+                    b["amount"] += amount_fen(t.get("total_amount", 0)) / 100
                     b["count"] += 1
                 return self._json({"hours": [
                     {"hour": "%02d:00" % h, "energy": round(buckets[h]["energy"], 4),
@@ -1478,7 +1483,13 @@ def make_api_handler(token, credentials=None):
             gun = int(pl.get("gun_no", 1))
             logic = str(pl.get("logic_card_no") or CFG.logic_card_no)
             phys = re.sub(r"[^0-9A-Fa-f]", "", str(pl.get("phys_card_no", "0"))) or "0"
-            balance = int(round(float(pl.get("balance", 1000)) * 100))   # 元 -> 分
+            value=pl.get("balance",1000)
+            if isinstance(value,bool) or not re.fullmatch(r'\d{1,8}(\.\d{1,2})?',str(value)):
+                return self._json({"error":"余额需为正数，最多两位小数"},400)
+            from decimal import Decimal
+            balance=int(Decimal(str(value))*100)
+            if not 1<=balance<=0xFFFFFFFF:
+                return self._json({"error":"余额超出支持范围"},400)
             log.info("[WEB] 对桩[%s]枪%d下发远程启机(0x34)", sess.pile_no, gun)
             key = sess.dl_remote_start(gun, logic, phys, balance)
             ev, box = sess.pending_start.get(key, (None, None))
@@ -2099,7 +2110,7 @@ class ChargingApp(CustomerAccounts):
         where=' WHERE '+' AND '.join(terms) if terms else ''
         base=' WITH records AS ('+union+') '
         with self.connect() as c:
-            sums=c.execute(base+'SELECT count(*) AS total,coalesce(sum(energy_raw),0) AS energy,coalesce(sum(amount_raw),0) AS amount FROM records'+where,args).fetchone()
+            sums=c.execute(base+'SELECT count(*) AS total,coalesce(sum(energy_raw),0) AS energy,coalesce(sum(CAST((amount_raw+50)/100 AS INTEGER)),0) AS amount FROM records'+where,args).fetchone()
             pages=max(1,(sums['total']+size-1)//size);page=min(page,pages)
             rows=c.execute(base+'SELECT * FROM records'+where+' ORDER BY record_time DESC,created_at DESC,serial_no DESC LIMIT ? OFFSET ?',args+[size,(page-1)*size]).fetchall()
         records=[]
@@ -2107,15 +2118,15 @@ class ChargingApp(CustomerAccounts):
             d=dict(row);tx=json.loads(d.pop('transaction_json')) if row['transaction_json'] else None
             d['transaction']=tx
             d['energy']=None if d.pop('energy_raw') is None else row['energy_raw']/10000
-            d['amount']=None if d.pop('amount_raw') is None else row['amount_raw']/10000
+            d['amount']=None if d.pop('amount_raw') is None else amount_fen(row['amount_raw'])/100
             d['amount_final']=tx is not None
             if not tx and row['source']=='customer' and row['status'] in ACTIVE_STATES:
                 _,latest,_=self.device(row['pile_no'],row['gun_no'])
                 if latest.get('serial_no')==row['serial_no']:
-                    d['energy']=latest.get('energy',0)/10000;d['amount']=latest.get('amount',0)/10000
+                    d['energy']=latest.get('energy',0)/10000;d['amount']=amount_fen(latest.get('amount',0))/100
             records.append(d)
         return {'records':records,'total':sums['total'],'page':page,'page_size':size,'pages':pages,
-                'summary':{'final_energy':sums['energy']/10000,'final_amount':sums['amount']/10000}}
+                'summary':{'final_energy':sums['energy']/10000,'final_amount':sums['amount']/100}}
 
     def active(self,pile,gun):
         with self.connect() as c:
@@ -2284,7 +2295,7 @@ class ChargingApp(CustomerAccounts):
         if d.get('_truncated'): raise ValueError('交易报文不完整，不能确认客户账单')
         raw=d.get('total_amount')
         if not isinstance(raw,int) or raw<0: raise ValueError('账单金额无效')
-        fen=(raw+50)//100  # 0.0001 yuan -> fen, round half up.
+        fen=amount_fen(raw)  # 0.0001 yuan -> fen, round half up.
         with self.connect() as c:
             c.execute('BEGIN IMMEDIATE')
             self._archive_write(c,d)
