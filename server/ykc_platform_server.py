@@ -2156,11 +2156,11 @@ class ChargingApp(CustomerAccounts):
         else: state='unknown'
         return sess,data,state
     def order_view(self,row):
-        _,data,state=self.device(row['pile_no'],row['gun_no'])
+        sess,data,state=self.device(row['pile_no'],row['gun_no'])
         if data.get('serial_no')!=row['serial_no']: data={}
         return {'id':row['id'],'pile_no':row['pile_no'],'gun_no':row['gun_no'],
                 'serial_no':row['serial_no'],'status':row['status'],'note':row['note'],
-                'created_at':row['created'],'updated_at':row['updated'],'device_state':state,
+                'created_at':row['created'],'updated_at':row['updated'],'device_state':state,'device_online':bool(sess),
                 'reserved_fen':row['reserved_fen'],'settled_fen':row['settled_fen'],'settlement_status':row['settlement_status'],'fail_reason':row['fail_reason'],
                 'latest':data,'transaction':json.loads(row['transaction_json']) if row['transaction_json'] else None}
     def customer_get(self,path,raw,uid):

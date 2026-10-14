@@ -6,8 +6,13 @@ vm.createContext(context);const html=fs.readFileSync(path.join(__dirname,'../cus
 (async()=>{await new Promise(setImmediate);await new Promise(setImmediate);
 vm.runInContext("user='alice';wallet={balance_fen:100000,available_fen:90000,reserved_fen:10000,ledger:[]};device={availability:'idle',latest:{gun_plugged:1}};page='device';render()",context);
 let text=element('view').innerHTML;if(!text.includes('id="reserveAmount"')||!text.includes('value="100"'))throw Error('default reservation');if(!text.includes('1000.00')||!text.includes('先拔枪再重新插枪'))throw Error('wallet or replug instructions');
-vm.runInContext("order={status:'failed',pile_no:'32010200000001',gun_no:1,note:'未检测到有效插枪，请先拔枪再重新插好枪（原因码5）',device_state:'idle',latest:{},settlement_status:'not_charged'};page='charging';render()",context);
+vm.runInContext("order={status:'failed',pile_no:'32010200000001',gun_no:1,note:'未检测到有效插枪，请先拔枪再重新插好枪（原因码5）',device_state:'unknown',device_online:true,latest:{},settlement_status:'not_charged'};page='charging';render()",context);
 text=element('view').innerHTML;if(!text.includes('原因码5')||!text.includes('未扣费'))throw Error('failure notice');
+if(!text.includes('id="retry"')||text.includes('id="stop"')||text.includes('不涉及真实付款')||!text.includes('设备连接：在线')||text.split('未扣费').length!==2)throw Error('failed order controls or connection');
+element('retry').onclick();
+if(!element('view').innerHTML.includes('确认充电设备')||!element('view').innerHTML.includes('id="start" disabled'))throw Error('retry must recheck device before start');
+vm.runInContext("page='charging';order.status='charging';order.device_state='charging';render()",context);
+if(!element('view').innerHTML.includes('id="stop"')||element('view').innerHTML.includes('id="retry"'))throw Error('charging controls');
 vm.runInContext("order.status='finished';order.settlement_status='settled';order.settled_fen=1235;render()",context);
 if(!element('view').innerHTML.includes('已扣费：12.35'))throw Error('settled amount');vm.runInContext("order.transaction={total_amount:10050,total_energy:700};render()",context);if(!element('view').innerHTML.includes('<strong>1.01</strong>'))throw Error('amount cent rounding');
 vm.runInContext("wallet.ledger=[{kind:'admin_credit',delta_fen:100,after_fen:100100,created:1,note:'<img src=x onerror=alert(1)>'}];page='wallet';render()",context);
