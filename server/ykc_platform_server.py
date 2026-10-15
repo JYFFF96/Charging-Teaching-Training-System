@@ -560,6 +560,9 @@ class PileSession:
         self.pending_start = {}   # 0x34 流水号hex -> [event, result]，等待 0x33 回复
         self.gun_locks = {n: threading.RLock() for n in range(1, 100)}
         self.customer_stops = {}
+        self.customer_query_lock = threading.Lock()
+        self.customer_queries = {}
+        self.customer_query_last = None
         self.last_seen = time.time()   # 最近收到任一帧的时间(看门狗判定离线用)
         self.watchdog_fired = False    # 看门狗已广播离线(避免重复)
         self.pending_ack = {}          # 应答帧hex -> [event, box] (0x55/0x57/0x51/0x91/0x13)
@@ -2159,8 +2162,26 @@ class ChargingApp(CustomerAccounts):
         elif data.get('status')==0: state='offline'
         else: state='unknown'
         return sess,data,state
+    def refresh_unknown_device(self,pile,gun):
+        sess,data,state=self.device(pile,gun)
+        if sess and state=='unknown':
+            # Shared by all customer tabs/accounts on this connection. Do not replace
+            # pending_ack['13']: an administrator may already be awaiting that reply.
+            now=time.monotonic()
+            with sess.customer_query_lock:
+                previous=sess.customer_queries.get(gun)
+                allowed=(previous is None or now-previous>=10) and (sess.customer_query_last is None or now-sess.customer_query_last>=1)
+                if allowed:
+                    sess.customer_queries[gun]=now;sess.customer_query_last=now
+            if allowed:
+                try: sess.send_frame(0x12,sess.pile_no_bcd+str_to_bcd(str(gun),1))
+                except OSError: log.warning('客户自动召唤实时数据发送失败: 桩%s 枪%s',pile,gun)
+            # A fast reply may already have refreshed the cache; otherwise the next
+            # existing customer poll picks it up without blocking an HTTP worker.
+            return self.device(pile,gun)
+        return sess,data,state
     def order_view(self,row):
-        sess,data,state=self.device(row['pile_no'],row['gun_no'])
+        sess,data,state=(self.refresh_unknown_device(row['pile_no'],row['gun_no']) if row['status'] in ACTIVE_STATES else self.device(row['pile_no'],row['gun_no']))
         if data.get('serial_no')!=row['serial_no']: data={}
         now=datetime.now();period=CFG.periods[now.hour*2+now.minute//30]
         rate_key=('jian','feng','ping','gu')[period];electricity,service=CFG.rates[rate_key]
@@ -2174,7 +2195,7 @@ class ChargingApp(CustomerAccounts):
         if path=='/api/customer/device':
             q=parse_qs(urlsplit(raw).query)
             pile,gun=self.target({'pile_no':q.get('pile_no',[''])[0],'gun_no':q.get('gun_no',[''])[0]})
-            _,data,state=self.device(pile,gun)
+            _,data,state=self.refresh_unknown_device(pile,gun)
             row=self.active(pile,gun)
             if row and row['user_id']!=uid:
                 return {'availability':'occupied','message':'该充电枪正在使用中，请选择其他充电枪。','pile_no':pile,'gun_no':gun}
@@ -2188,6 +2209,7 @@ class ChargingApp(CustomerAccounts):
                         'active_order':self.order_view(own),'pile_no':pile,'gun_no':gun}
             prices={k:{'electricity':v[0]/100000,'service':v[1]/100000} for k,v in CFG.rates.items()}
             return {'availability':state,'pile_no':pile,'gun_no':gun,'latest':data,
+                    'message':'正在查询设备，请等待设备回复；页面会自动刷新。' if state=='unknown' else '',
                     'billing':{'rates':prices,'periods':CFG.periods,'loss_ratio':CFG.loss_ratio},'payment_enabled':False}
         if path=='/api/customer/orders':
             with self.connect() as c:
