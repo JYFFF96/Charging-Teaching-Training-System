@@ -2162,9 +2162,12 @@ class ChargingApp(CustomerAccounts):
     def order_view(self,row):
         sess,data,state=self.device(row['pile_no'],row['gun_no'])
         if data.get('serial_no')!=row['serial_no']: data={}
+        now=datetime.now();period=CFG.periods[now.hour*2+now.minute//30]
+        rate_key=('jian','feng','ping','gu')[period];electricity,service=CFG.rates[rate_key]
         return {'id':row['id'],'pile_no':row['pile_no'],'gun_no':row['gun_no'],
                 'serial_no':row['serial_no'],'status':row['status'],'note':row['note'],
                 'created_at':row['created'],'updated_at':row['updated'],'device_state':state,'device_online':bool(sess),
+                'billing':{'current':{'label':('尖','峰','平','谷')[period],'electricity':electricity/100000,'service':service/100000},'reference_only':True},
                 'reserved_fen':row['reserved_fen'],'settled_fen':row['settled_fen'],'settlement_status':row['settlement_status'],'fail_reason':row['fail_reason'],
                 'latest':data,'transaction':json.loads(row['transaction_json']) if row['transaction_json'] else None}
     def customer_get(self,path,raw,uid):

@@ -1,7 +1,7 @@
 const fs=require('fs'),vm=require('vm'),path=require('path');
 class Element{constructor(){this.innerHTML='';this.textContent='';this.value='';this.style={};this.classList={contains:()=>false};}querySelector(){return new Element()}querySelectorAll(){return []}reset(){}}
 const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
-const context={console,URLSearchParams,AbortController,Date,Math,JSON,Number,String,Object,Array,location:{search:'?pile_no=32010200000001&gun_no=1'},document:{hidden:false,getElementById:element},setTimeout:()=>0,clearTimeout(){},setInterval:()=>0,fetch:async url=>({ok:!url.endsWith('/me'),status:url.endsWith('/me')?401:200,json:async()=>url.endsWith('/me')?{error:'请先登录'}:{insecure_test:true,test_balance_yuan:100}})};
+const context={console,URLSearchParams,AbortController,Date,Math,JSON,Number,String,Object,Array,location:{search:'?pile_no=32010200000001&gun_no=1'},document:{hidden:false,body:{classList:{toggle(){}}},getElementById:element},setTimeout:()=>0,clearTimeout(){},setInterval:()=>0,fetch:async url=>({ok:!url.endsWith('/me'),status:url.endsWith('/me')?401:200,json:async()=>url.endsWith('/me')?{error:'请先登录'}:{insecure_test:true,test_balance_yuan:100}})};
 vm.createContext(context);const html=fs.readFileSync(path.join(__dirname,'../customer/charge.html'),'utf8');if(!html.includes('<h1>智学客充电教学实训平台</h1>')||!html.includes('color:#9fd8d5')||html.includes('id="transport"')||html.includes('<div class="notice">'))throw Error('title or removed notice');vm.runInContext(html.split('<script>')[1].split('</script>')[0],context);
 (async()=>{await new Promise(setImmediate);await new Promise(setImmediate);
 vm.runInContext("user='alice';wallet={balance_fen:100000,available_fen:90000,reserved_fen:10000,ledger:[]};device={availability:'idle',latest:{gun_plugged:1}};page='device';render()",context);
@@ -30,5 +30,13 @@ vm.runInContext("page='orders';render()",context);let prevented=false;row.onkeyd
 if(vm.runInContext("tariffSummary({gu_price:80000,gu_energy:700,gu_amount:560,ping_price:120000,ping_energy:1000,ping_amount:1200})",context)!=='平 1.20元/度、谷 0.80元/度')throw Error('mixed billing summary');
 if(vm.runInContext("tariffSummary(null)",context)!=='计费类型待账单确认')throw Error('no current tariff substituted');
 if(!vm.runInContext("tariffDetails({gu_price:0,gu_energy:700,gu_amount:0})",context).includes('<td>谷</td><td>0.00</td><td>0.0700</td><td>0.00</td>'))throw Error('historical zero tariff must remain zero');
+vm.runInContext("order={id:'dashboard',serial_no:'order-dashboard',pile_no:'32010200000001',gun_no:1,status:'charging',device_state:'charging',device_online:true,latest:{out_voltage:4000,out_current:500,soc:80,batt_max_temp:85,gun_temp:92,charge_time:28,remain_time:7,energy:50000,amount:120000,updated_at:1792036800},billing:{current:{label:'平',electricity:0.8,service:0.4}}};page='charging';render()",context);
+text=element('view').innerHTML;for(const expected of ['80%','400.0','50.0','20.00','>35<','>42<','5.0000','12.00','停止充电','充电曲线','平台参考费率'])if(!text.includes(expected))throw Error('dashboard missing '+expected);
+if(!text.includes('等待更多实时数据'))throw Error('fake curve before samples');
+vm.runInContext('render()',context);if(vm.runInContext("chargeSamples.get('dashboard').length",context)!==1)throw Error('duplicate sample');
+vm.runInContext("order.latest.updated_at+=15;order.latest.out_current=510;render()",context);
+if(!element('view').innerHTML.includes('电压看左轴'))throw Error('curve sample rendering');
+vm.runInContext("order.device_state='unknown';order.latest={soc:255,out_voltage:65535};render()",context);
+text=element('view').innerHTML;if(!text.includes('id="stop" disabled')||text.includes('255%')||text.includes('6553.5'))throw Error('stale or invalid telemetry');
 console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});
