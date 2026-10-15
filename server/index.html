@@ -667,7 +667,7 @@ async function deleteCustomerAccount(username){
 }
 async function showWalletLedger(username){
  try{const data=await adminWalletFetch('/api/customer-wallets/detail?username='+encodeURIComponent(username));const box=$('#walletLedger');box.replaceChildren();const heading=document.createElement('h3');heading.textContent=username+' · 钱包流水';box.appendChild(heading);const kinds={bonus:'赠送',admin_credit:'管理员充值',admin_debit:'管理员扣费',charging:'充电扣费'};
- for(const entry of data.wallet.ledger){const line=document.createElement('p');line.textContent=`${new Date(entry.created*1000).toLocaleString()} · ${kinds[entry.kind]||entry.kind} · ${entry.delta_fen>=0?'+':''}${walletMoney(entry.delta_fen)} 元 · 余额 ${walletMoney(entry.after_fen)} 元 · ${entry.note} · 操作人 ${entry.actor}`;box.appendChild(line);}
+ for(const entry of data.wallet.ledger){const line=document.createElement('p');line.textContent=`${new Date(entry.created*1000).toLocaleString()} · ${kinds[entry.kind]||entry.kind} · ${entry.delta_fen>=0?'+':''}${walletMoney(entry.delta_fen)} 元 · 余额 ${walletMoney(entry.after_fen)} 元 · ${entry.note} · 操作人 ${entry.kind==='charging'?'客户本人':'管理员'}`;box.appendChild(line);}
  }catch(error){$('#walletError').textContent=error.message;}
 }
 $('#walletSearchForm').onsubmit=e=>{e.preventDefault();walletSearch=$('#walletSearch').value.trim();walletPage=1;initWallets();};
