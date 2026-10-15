@@ -27,5 +27,8 @@ if(vm.runInContext("orderCost(orders[2])",context)!=='—')throw Error('pending 
 const row={dataset:{order:'row1'}};element('view').querySelectorAll=selector=>selector==='[data-order]'?[row]:[];
 vm.runInContext('render()',context);row.onclick();if(!element('view').innerHTML.includes('serial1')||!element('view').innerHTML.includes('订单编号'))throw Error('row detail navigation');
 vm.runInContext("page='orders';render()",context);let prevented=false;row.onkeydown({key:'Enter',preventDefault(){prevented=true}});if(!prevented||!element('view').innerHTML.includes('serial1'))throw Error('keyboard row navigation');
+if(vm.runInContext("tariffSummary({gu_price:80000,gu_energy:700,gu_amount:560,ping_price:120000,ping_energy:1000,ping_amount:1200})",context)!=='平 1.20元/度、谷 0.80元/度')throw Error('mixed billing summary');
+if(vm.runInContext("tariffSummary(null)",context)!=='计费类型待账单确认')throw Error('no current tariff substituted');
+if(!vm.runInContext("tariffDetails({gu_price:0,gu_energy:700,gu_amount:0})",context).includes('<td>谷</td><td>0.00</td><td>0.0700</td><td>0.00</td>'))throw Error('historical zero tariff must remain zero');
 console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});
