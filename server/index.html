@@ -156,7 +156,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
     <a data-page="overview" class="on">运营总览</a>
     <a data-page="devices">设备监控</a>
     <a data-page="orders">充电记录</a>
-    <a data-page="wallets">钱包</a>
+    <a data-page="wallets">用户管理</a>
     <a data-page="faults">故障管理</a>
     <a data-page="stations">充电站管理</a>
     <a data-page="logs">报文日志</a>
@@ -172,7 +172,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
     <a data-page="overview" class="on">📊 运营总览</a>
     <a data-page="devices">🔌 设备监控</a>
     <a data-page="orders">📋 充电记录</a>
-    <a data-page="wallets">💰 钱包</a>
+    <a data-page="wallets">👤 用户管理</a>
     <a data-page="faults">🛠 故障管理</a>
     <a data-page="stations">🏢 充电站管理</a>
     <a data-page="logs">📜 报文日志</a>
@@ -280,7 +280,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
     </section>
 
     <section class="page" id="page-wallets"><div class="panel">
-      <h2>💰 客户钱包</h2><p>仅数字模拟，不发生真实资金交易。新注册与首次开通钱包赠送1000元，仅赠送一次。管理员扣费不能动用充电预留额度。</p>
+      <h2>👤 用户管理</h2><p>仅数字模拟，不发生真实资金交易。新注册与首次开通钱包赠送1000元，仅赠送一次。管理员扣费不能动用充电预留额度。</p>
       <form id="walletSearchForm" style="display:flex;gap:12px;margin:16px 0"><input id="walletSearch" placeholder="客户账号，支持部分匹配"><button class="primary">查询</button><button type="button" id="walletRefresh">刷新</button></form>
       <div style="overflow-x:auto"><table id="walletTable"><thead><tr><th>客户账号</th><th>余额(元)</th><th>可用余额(元)</th><th>充电预留(元)</th><th>操作</th></tr></thead><tbody></tbody></table></div>
       <div style="display:flex;gap:12px;align-items:center;margin:16px 0"><button id="walletPrev">上一页</button><span id="walletPager"></span><button id="walletNext">下一页</button></div>
