@@ -128,7 +128,7 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
 .toast{position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#fff;border:1px solid var(--primary);
   box-shadow:0 4px 16px rgba(0,0,0,.12);padding:10px 20px;border-radius:8px;display:none;z-index:30;font-size:13px}
 .empty{color:var(--dim);text-align:center;padding:36px 0}
-#txTable .tariff-cell{min-width:130px;max-width:180px;white-space:normal}
+#txTable .tariff-cell{min-width:85px;max-width:120px;white-space:normal}
 .tariff-open{display:block;border:0;background:transparent;color:var(--accent,#087f83);padding:0;text-align:left;font:inherit;cursor:pointer;line-height:1.6}
 .tariff-open small{display:block;color:#7a8795;font-size:11px}
 .tariff-dialog{width:min(540px,calc(100vw - 32px));max-height:85vh;overflow:auto;border:0;border-radius:16px;padding:24px;color:#183047;box-shadow:0 16px 60px #0003}
@@ -272,8 +272,8 @@ select{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-siz
         <div style="overflow-x:auto">
         <table id="txTable"><thead><tr>
           <th>客户账号</th><th>状态</th><th>流水号</th><th>桩编号</th><th>枪</th><th>开始/创建时间</th><th>结束时间</th>
-          <th>电量(kWh)</th><th>计损电量(kWh)</th><th>金额(元)</th><th>计费类型</th><th>VIN</th><th>启动方式</th><th>停止原因</th><th>来源</th><th>备注</th>
-        </tr></thead><tbody><tr><td colspan="16" class="empty">暂无记录</td></tr></tbody></table>
+          <th>电量(kWh)</th><th>计损电量(kWh)</th><th>总金额(元)</th><th>VIN</th><th>启动方式</th><th>停止原因</th><th>来源</th><th>备注</th>
+        </tr></thead><tbody><tr><td colspan="15" class="empty">暂无记录</td></tr></tbody></table>
         </div>
         <div style="display:flex;gap:12px;align-items:center;margin-top:16px"><button id="recordPrev">上一页</button><span id="recordPage">第1页</span><button id="recordNext">下一页</button><label>每页<select id="recordSize"><option value="20">20</option><option value="50" selected>50</option><option value="100">100</option></select></label></div>
       </div>
@@ -599,12 +599,6 @@ function updateStats(){
 let txCount=0, txAmount=0;
 let recordPage=1,recordPages=1,recordFilters={},recordRequest=0,recordTimer;
 const ORDER_STATUS={starting:'正在启动',charging:'充电中',stopping:'正在停止',unknown:'结果待确认',ending:'等待账单',finished:'已结束',failed:'启动失败'};
-function compactTariffs(tx){
- if(!tx)return '待账单';
- const kinds=[['jian','尖'],['feng','峰'],['ping','平'],['gu','谷']];
- const used=kinds.filter(([key])=>Number(tx[key+'_energy'])>0||Number(tx[key+'_amount'])>0);
- return used.length?used.map(([key,label])=>label+' '+(tx[key+'_price']==null?'—':(Number(tx[key+'_price'])/100000).toFixed(2))+'元/度').join('、'):'无分时用量';
-}
 function showTariffDetails(d){
  let dialog=document.getElementById('tariffDialog');
  if(!dialog){dialog=document.createElement('dialog');dialog.id='tariffDialog';dialog.className='tariff-dialog';document.body.appendChild(dialog);}
@@ -622,8 +616,8 @@ function showTariffDetails(d){
 function recordRow(d){
  const tx=d.transaction||{},flagMap={1:'APP',2:'刷卡',4:'离线卡',5:'VIN'};
  const amount=d.amount==null?'—':Number(d.amount).toFixed(2)+(d.amount_final?'':'（实时）');
- const values=[d.username||(d.user_id?'已删除账号':'未关联用户'),ORDER_STATUS[d.status]||d.status,d.serial_no,d.pile_no,String(d.gun_no).padStart(2,'0'),d.start_time||d.record_time,d.end_time||'—',d.energy==null?'—':Number(d.energy).toFixed(4),tx.total_loss_energy==null?'—':(tx.total_loss_energy/10000).toFixed(4),amount,compactTariffs(d.transaction),tx.vin||'—',flagMap[tx.trade_flag]||tx.trade_flag||'—',tx.stop_reason??'—',d.source==='customer'?'客户订单':'桩交易',d.note||'—'];
- const row=document.createElement('tr');for(const [index,value] of values.entries()){const cell=document.createElement('td');if(index===10){cell.className='tariff-cell';if(d.transaction){const button=document.createElement('button');button.type='button';button.className='tariff-open';button.textContent=compactTariffs(d.transaction);button.setAttribute('aria-haspopup','dialog');const hint=document.createElement('small');hint.textContent='查看明细';button.appendChild(hint);button.onclick=()=>showTariffDetails(d);cell.appendChild(button);}else cell.textContent='待账单';}else cell.textContent=value??'—';row.appendChild(cell);}return row;
+ const values=[d.username||(d.user_id?'已删除账号':'未关联用户'),ORDER_STATUS[d.status]||d.status,d.serial_no,d.pile_no,String(d.gun_no).padStart(2,'0'),d.start_time||d.record_time,d.end_time||'—',d.energy==null?'—':Number(d.energy).toFixed(4),tx.total_loss_energy==null?'—':(tx.total_loss_energy/10000).toFixed(4),amount,tx.vin||'—',flagMap[tx.trade_flag]||tx.trade_flag||'—',tx.stop_reason??'—',d.source==='customer'?'客户订单':'桩交易',d.note||'—'];
+ const row=document.createElement('tr');for(const [index,value] of values.entries()){const cell=document.createElement('td');if(index===9){cell.className='tariff-cell';if(d.transaction){const button=document.createElement('button');button.type='button';button.className='tariff-open';button.textContent=amount;button.setAttribute('aria-haspopup','dialog');const hint=document.createElement('small');hint.textContent='查看明细';button.appendChild(hint);button.onclick=()=>showTariffDetails(d);cell.appendChild(button);}else cell.textContent=amount;}else cell.textContent=value??'—';row.appendChild(cell);}return row;
 }
 async function initTx(){
  if(!TOKEN)return;const request=++recordRequest;
@@ -633,7 +627,7 @@ async function initTx(){
  const data=await response.json();if(request!==recordRequest)return;
  if(!response.ok)throw new Error(data.error||'记录读取失败');
  recordPage=data.page;recordPages=data.pages;const tb=$('#txTable tbody');tb.replaceChildren();
- if(!data.records.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=16;cell.className='empty';cell.textContent='没有符合条件的记录';row.appendChild(cell);tb.appendChild(row);}
+ if(!data.records.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=15;cell.className='empty';cell.textContent='没有符合条件的记录';row.appendChild(cell);tb.appendChild(row);}
  else for(const record of data.records)tb.appendChild(recordRow(record));
  $('#recordSummary').textContent=`符合条件 ${data.total} 条 · 最终账单电量 ${Number(data.summary.final_energy).toFixed(4)} kWh · 最终账单金额 ${Number(data.summary.final_amount).toFixed(2)} 元（不含进行中估算，未代表支付到账）`;
  $('#recordPage').textContent=`第 ${recordPage} / ${recordPages} 页`;$('#recordPrev').disabled=recordPage<=1;$('#recordNext').disabled=recordPage>=recordPages;$('#recordError').textContent='';
