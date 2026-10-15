@@ -686,7 +686,7 @@ setInterval(()=>{if(TOKEN&&!document.hidden&&$('#page-wallets').classList.contai
 async function api(path, body, method){
   const opt=body?{method:method||"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{};
   if(TOKEN) opt.headers=Object.assign({"Authorization":"Bearer "+TOKEN},opt.headers||{});
-  const r=await fetch(path+qs(),opt); return r.json();
+  const r=await fetch(path,opt); return r.json();
 }
 function openStart(no){ $("#sPile").textContent=no; $("#startMask").classList.add("on"); }
 function openStop(no){ $("#pPile").textContent=no; $("#stopMask").classList.add("on"); }
