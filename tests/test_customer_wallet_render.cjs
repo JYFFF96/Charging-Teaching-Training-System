@@ -45,6 +45,15 @@ context.FormData=class{get(key){return {account:'alice',password:'secret123'}[ke
 let loginPayload;context.fetch=async(url,options)=>{loginPayload=JSON.parse(options.body);return {ok:false,status:401,json:async()=>({error:'账号或密码错误'})}};
 const submit={disabled:false},form={isConnected:true,querySelector:()=>submit,reset(){}};
 await element('auth').onsubmit({preventDefault(){},target:form});if(submit.disabled||loginPayload.username!=='alice'||loginPayload.password!=='secret123'||element('message').textContent!=='账号或密码错误')throw Error('login submit failure recovery');
-vm.runInContext("page='register';render()",context);if(element('view').innerHTML.includes('login-card')||!element('view').innerHTML.includes('安全问题'))throw Error('register scope changed');
+vm.runInContext("page='register';render()",context);if(!element('view').innerHTML.includes('login-card')||!element('view').innerHTML.includes('安全问题')||!element('view').innerHTML.includes('toggle-confirm'))throw Error('register styled fields');
+text=element('view').innerHTML;if((text.match(/<option value=/g)||[]).length!==8||!text.includes('autocomplete="new-password"'))throw Error('security questions or register password attributes');
+context.FormData=class{get(key){return {account:'alice',password:'newpass123',confirm:'different',question:'movie',answer:'test'}[key]||null}};
+await element('auth').onsubmit({preventDefault(){},target:form});if(element('message').textContent!=='两次输入的密码不一致')throw Error('register confirmation validation');
+vm.runInContext("page='recover';render()",context);text=element('view').innerHTML;if(!text.includes('login-card')||!text.includes('id="newpassword"')||!text.includes('id="toggle-confirm"')||!text.includes('验证并重置密码')||(text.match(/<option value=/g)||[]).length!==8)throw Error('recovery layout');
+element('newpassword').type='password';element('toggle-newpassword').onclick();if(element('newpassword').type!=='text')throw Error('recovery password visibility');
+context.FormData=class{get(key){return {account:'alice',newpassword:'newpass123',confirm:'newpass123',question:'movie',answer:'test'}[key]||null}};
+const recoveryCalls=[];context.fetch=async(url,options)=>{recoveryCalls.push([url,JSON.parse(options.body)]);return {ok:true,json:async()=>url.endsWith('/verify')?{reset_token:'verified-token'}:{ok:true}}};
+await element('auth').onsubmit({preventDefault(){},target:form});
+if(recoveryCalls.length!==2||!recoveryCalls[0][0].endsWith('/recovery/verify')||recoveryCalls[0][1].security_question_id!=='movie'||recoveryCalls[0][1].security_answer!=='test'||recoveryCalls[1][1].reset_token!=='verified-token'||recoveryCalls[1][1].new_password!=='newpass123'||!element('view').innerHTML.includes('欢迎<span>登录'))throw Error('verified password reset flow');
 console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});
