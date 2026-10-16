@@ -1,5 +1,5 @@
 const fs=require('fs'),vm=require('vm'),path=require('path');
-class Element{constructor(){this.innerHTML='';this.textContent='';this.value='';this.style={};this.classList={contains:()=>false};}querySelector(){return new Element()}querySelectorAll(){return []}reset(){}}
+class Element{constructor(){this.innerHTML='';this.textContent='';this.value='';this.style={};this.classList={contains:()=>false};}setAttribute(name,value){this[name]=value}querySelector(){return new Element()}querySelectorAll(){return []}reset(){}}
 const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
 const context={console,URLSearchParams,AbortController,Date,Math,JSON,Number,String,Object,Array,location:{search:'?pile_no=32010200000001&gun_no=1'},document:{hidden:false,body:{classList:{toggle(){}}},getElementById:element},setTimeout:()=>0,clearTimeout(){},setInterval:()=>0,fetch:async url=>({ok:!url.endsWith('/me'),status:url.endsWith('/me')?401:200,json:async()=>url.endsWith('/me')?{error:'请先登录'}:{insecure_test:true,test_balance_yuan:100}})};
 vm.createContext(context);const html=fs.readFileSync(path.join(__dirname,'../customer/charge.html'),'utf8');if(!html.includes('<h1>智学客充电教学实训平台</h1>')||!html.includes('color:#9fd8d5')||html.includes('id="transport"')||html.includes('<div class="notice">'))throw Error('title or removed notice');vm.runInContext(html.split('<script>')[1].split('</script>')[0],context);
@@ -38,5 +38,13 @@ vm.runInContext("order.latest.updated_at+=15;order.latest.out_current=510;render
 if(!element('view').innerHTML.includes('电压看左轴'))throw Error('curve sample rendering');
 vm.runInContext("order.device_state='unknown';order.latest={soc:255,out_voltage:65535};render()",context);
 text=element('view').innerHTML;if(!text.includes('id="stop" disabled')||text.includes('255%')||text.includes('6553.5'))throw Error('stale or invalid telemetry');
+vm.runInContext("user='';page='login';render()",context);
+text=element('view').innerHTML;if(!text.includes('class="login-card"')||!text.includes('autocomplete="current-password"')||!text.includes('pattern="[A-Za-z0-9_]{4,32}"')||!text.includes('minlength="8"')||!text.includes('data-page="register"')||!text.includes('data-page="recover"'))throw Error('login layout and validation');
+const password=element('password');password.type='password';password.value='secret123';element('togglePassword').onclick();if(password.type!=='text'||password.value!=='secret123'||element('togglePassword')['aria-pressed']!=='true')throw Error('show password');element('togglePassword').onclick();if(password.type!=='password')throw Error('hide password');
+context.FormData=class{get(key){return {account:'alice',password:'secret123'}[key]||null}};
+let loginPayload;context.fetch=async(url,options)=>{loginPayload=JSON.parse(options.body);return {ok:false,status:401,json:async()=>({error:'账号或密码错误'})}};
+const submit={disabled:false},form={isConnected:true,querySelector:()=>submit,reset(){}};
+await element('auth').onsubmit({preventDefault(){},target:form});if(submit.disabled||loginPayload.username!=='alice'||loginPayload.password!=='secret123'||element('message').textContent!=='账号或密码错误')throw Error('login submit failure recovery');
+vm.runInContext("page='register';render()",context);if(element('view').innerHTML.includes('login-card')||!element('view').innerHTML.includes('安全问题'))throw Error('register scope changed');
 console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});
