@@ -55,5 +55,9 @@ context.FormData=class{get(key){return {account:'alice',newpassword:'newpass123'
 const recoveryCalls=[];context.fetch=async(url,options)=>{recoveryCalls.push([url,JSON.parse(options.body)]);return {ok:true,json:async()=>url.endsWith('/verify')?{reset_token:'verified-token'}:{ok:true}}};
 await element('auth').onsubmit({preventDefault(){},target:form});
 if(recoveryCalls.length!==2||!recoveryCalls[0][0].endsWith('/recovery/verify')||recoveryCalls[0][1].security_question_id!=='movie'||recoveryCalls[0][1].security_answer!=='test'||recoveryCalls[1][1].reset_token!=='verified-token'||recoveryCalls[1][1].new_password!=='newpass123'||!element('view').innerHTML.includes('欢迎<span>登录'))throw Error('verified password reset flow');
+vm.runInContext("user='alice';wallet={balance_fen:99996,available_fen:99996,reserved_fen:0};page='device';device={availability:'idle',latest:{gun_plugged:1},billing:{rates:{jian:{electricity:1.2,service:.4},feng:{electricity:1,service:.4},ping:{electricity:.8,service:.4},gu:{electricity:.4,service:.4}}}};render()",context);
+text=element('view').innerHTML;for(const expected of ['device-hero','device-balance','device-rates','1.60','1.40','1.20','0.80','已就绪，可<span>充电</span>','id="reserveAmount"','step="0.01"','value="100"'])if(!text.includes(expected))throw Error('device design '+expected);
+vm.runInContext('device.latest.gun_plugged=0;render()',context);text=element('view').innerHTML;if(!text.includes('请先<span>插枪</span>')||!text.includes('id="start" disabled'))throw Error('unplugged readiness');
+vm.runInContext("device.availability='unknown';render()",context);text=element('view').innerHTML;if(text.includes('已就绪，可')||!text.includes('等待最新设备数据')||!text.includes('id="start" disabled'))throw Error('unknown readiness');
 console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});
