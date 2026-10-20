@@ -1,5 +1,5 @@
 const fs=require('fs'),vm=require('vm'),path=require('path');
-class Element{constructor(){this.innerHTML='';this.textContent='';this.value='';this.style={};this.classList={contains:()=>false};}setAttribute(name,value){this[name]=value}querySelector(){return new Element()}querySelectorAll(){return []}reset(){}}
+class Element{constructor(){this.innerHTML='';this.textContent='';this.value='';this.style={};this.classList={contains:()=>false};}showModal(){this.open=true}close(){this.open=false;if(this.onclose)this.onclose()}setAttribute(name,value){this[name]=value}querySelector(){return new Element()}querySelectorAll(){return []}reset(){}}
 const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id)};
 const context={console,URLSearchParams,AbortController,Date,Math,JSON,Number,String,Object,Array,location:{search:'?pile_no=32010200000001&gun_no=1'},document:{hidden:false,body:{classList:{toggle(){}}},getElementById:element},setTimeout:()=>0,clearTimeout(){},setInterval:()=>0,fetch:async url=>({ok:!url.endsWith('/me'),status:url.endsWith('/me')?401:200,json:async()=>url.endsWith('/me')?{error:'请先登录'}:{insecure_test:true,test_balance_yuan:100}})};
 vm.createContext(context);const html=fs.readFileSync(path.join(__dirname,'../customer/charge.html'),'utf8');if(!html.includes('<h1>交直流一体化实训系统</h1>')||!html.includes('color:#9fd8d5')||html.includes('id="transport"')||html.includes('<div class="notice">'))throw Error('title or removed notice');vm.runInContext(html.split('<script>')[1].split('</script>')[0],context);
@@ -59,5 +59,13 @@ vm.runInContext("user='alice';wallet={balance_fen:99996,available_fen:99996,rese
 text=element('view').innerHTML;for(const expected of ['device-hero','device-balance','device-rates','1.60','1.40','1.20','0.80','已就绪，可<span>充电</span>','id="reserveAmount"','step="0.01"','value="100"'])if(!text.includes(expected))throw Error('device design '+expected);
 vm.runInContext('device.latest.gun_plugged=0;render()',context);text=element('view').innerHTML;if(!text.includes('请先<span>插枪</span>')||!text.includes('id="start" disabled'))throw Error('unplugged readiness');
 vm.runInContext("device.availability='unknown';render()",context);text=element('view').innerHTML;if(text.includes('已就绪，可')||!text.includes('等待最新设备数据')||!text.includes('id="start" disabled'))throw Error('unknown readiness');
+vm.runInContext("user='alice';page='charging';busy=false;order={id:'confirm-order',pile_no:'32010200000001',gun_no:1,status:'charging',device_state:'charging',device_online:true,latest:{}};render()",context);
+const stopRequests=[];context.fetch=async(url,options)=>{stopRequests.push(url);return {ok:true,json:async()=>url.endsWith('/stop')?{order:{id:'confirm-order',pile_no:'32010200000001',gun_no:1,status:'stopping',device_state:'charging',latest:{}}}:{wallet:{balance_fen:100000,available_fen:90000,reserved_fen:10000}}}};
+element('stop').onclick();if(!element('stopConfirm').open||stopRequests.length)throw Error('stop must require confirmation');
+element('stopCancel').onclick();if(element('stopConfirm').open||stopRequests.length)throw Error('cancel sent stop request');
+element('stop').onclick();const stopping=element('stopAccept').onclick();element('stopAccept').onclick();await stopping;
+if(stopRequests.filter(url=>url.endsWith('/stop')).length!==1||element('stopConfirm').open)throw Error('confirmed stop duplicate request');
+vm.runInContext("order.status='charging';page='charging';render()",context);element('stop').onclick();vm.runInContext("order.id='different-order';render()",context);
+if(element('stopConfirm').open)throw Error('stale confirmation not closed');element('stopAccept').onclick();if(stopRequests.filter(url=>url.endsWith('/stop')).length!==1)throw Error('stale dialog stopped different order');
 console.log('PASS customer balance, replug failure notice, settlement and ledger rendering');
 })().catch(e=>{console.error(e);process.exit(1)});
