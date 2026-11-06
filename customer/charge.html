@@ -18,7 +18,7 @@ body.account-screen{background:#f3f6f5;color:#1d3529}body.account-screen header{
 const query=new URLSearchParams(location.search);
 // 兼容桩自动生成的16位桩枪码与原有的显式 gun_no 参数。
 const rawPile=query.get('pile_no')||'';
-const combined=/^\\d{16}$/.test(rawPile)&&!query.has('gun_no');
+const combined=/^\d{16}$/.test(rawPile)&&!query.has('gun_no');
 const pile=combined?rawPile.slice(0,14):rawPile;
 const gun=combined?String(Number(rawPile.slice(14))):(query.get('gun_no')||'1');
 const valid=/^\d{14}$/.test(pile)&&/^([1-9]|[1-9]\d)$/.test(gun);
