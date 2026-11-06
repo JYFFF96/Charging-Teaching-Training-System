@@ -16,7 +16,11 @@ body.account-screen{background:#f3f6f5;color:#1d3529}body.account-screen header{
 </style></head><body><header><h1>交直流一体化实训系统</h1><span>连接设备，轻松充电</span></header><main><p id="context"></p><div id="view"></div><p id="message" role="status" aria-live="polite"></p></main><dialog id="stopConfirm" class="stop-confirm" aria-labelledby="stopConfirmTitle" aria-describedby="stopConfirmText"><h2 id="stopConfirmTitle">确认停止充电？</h2><p id="stopConfirmText">确认后将向设备发送停止指令，充电结束后按最终账单结算本次费用。</p><div class="stop-confirm-actions"><button type="button" id="stopCancel" autofocus>取消</button><button type="button" id="stopAccept">确认停止</button></div></dialog><footer>充电教学与实训系统 · 客户账号版</footer><script>
 'use strict';
 const query=new URLSearchParams(location.search);
-const pile=query.get('pile_no')||'';const gun=query.get('gun_no')||'1';
+// 兼容桩自动生成的16位桩枪码与原有的显式 gun_no 参数。
+const rawPile=query.get('pile_no')||'';
+const combined=/^\\d{16}$/.test(rawPile)&&!query.has('gun_no');
+const pile=combined?rawPile.slice(0,14):rawPile;
+const gun=combined?String(Number(rawPile.slice(14))):(query.get('gun_no')||'1');
 const valid=/^\d{14}$/.test(pile)&&/^([1-9]|[1-9]\d)$/.test(gun);
 const view=document.getElementById('view'),message=document.getElementById('message');
 document.getElementById('context').textContent=valid?`当前设备：${pile} / ${gun}号枪`:'未获取有效设备信息，请扫描带桩号和枪号的二维码。';
