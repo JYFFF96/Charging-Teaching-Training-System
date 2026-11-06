@@ -36,6 +36,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 SOF = 0x68  # 起始标志
+QR_PREFIX = "http://182.92.85.98:8088/?pile_no="
+QR_FORMAT = 0x01  # 桩号(14位) + 枪号(2位)，由充电桩自行追加
+QR_ACK_TIMEOUT = 5.0
+QR_MAX_ATTEMPTS = 3
 
 # =====================================================================
 # CRC16 校验（附录 13.2，多项式表与协议文档一致）
@@ -323,6 +327,8 @@ SPECS = {
     0x63: ("充电桩返回数据(上行)", [
         F("pile_no", "bcd7"), F("gun_no", "bin1"),
         F("lock_ack", "bin1", "1成功 0失败"), F("reserved", "bin4hex")]),
+    0xF0: ("后台远程下发二维码前缀", [F("pile_no", "bcd7"), F("qr_format", "bin1"), F("prefix_len", "bin1")]),
+    0xF1: ("充电桩应答二维码下发", [F("pile_no", "bcd7"), F("result", "bin1", "0成功 1失败")]),
     0x91: ("远程重启应答", [F("pile_no", "bcd7"), F("result", "bin1")]),
     0x92: ("远程重启", [F("pile_no", "bcd7"), F("ctrl", "bin1", "1立即 2空闲")]),
     0x93: ("远程更新应答", [
@@ -384,6 +390,14 @@ def decode_field(fmt: str, data: bytes):
 def parse_body(ftype: int, body: bytes) -> dict:
     # 按字段定义表解析消息体；变长帧(0x44/0x45/0x46/0x47/0x48)特殊处理
     out = {}
+    if ftype == 0xF0:
+        if len(body) < 9:
+            return {"error": "二维码报文长度不足"}
+        size = body[8]
+        if len(body) != 9 + size:
+            return {"error": "二维码前缀长度不匹配"}
+        return {"pile_no": bcd_to_str(body[:7]), "qr_format": body[7],
+                "prefix_len": size, "prefix": ascii_str(body[9:])}
     if ftype in (0x44, 0x46, 0x48):            # 离线卡同步/清除/查询(下行)，变长卡组
         out["pile_no"] = bcd_to_str(body[0:7])
         out["card_count"] = body[7]
@@ -566,6 +580,10 @@ class PileSession:
         self.last_seen = time.time()   # 最近收到任一帧的时间(看门狗判定离线用)
         self.watchdog_fired = False    # 看门狗已广播离线(避免重复)
         self.pending_ack = {}          # 应答帧hex -> [event, box] (0x55/0x57/0x51/0x91/0x13)
+        self.qr_lock = threading.RLock()
+        self.qr_attempts = 0
+        self.qr_confirmed = False
+        self.qr_timer = None
 
     # ---------- 底层收发 ----------
     def send_frame(self, ftype: int, body: bytes = b""):
@@ -624,6 +642,70 @@ class PileSession:
         SessionRegistry.register(self.pile_no, self)
         log.info("  桩[%s] 登录: %s", self.pile_no, json.dumps(d, ensure_ascii=False))
         self.reply(seq, 0x02, self.pile_no_bcd + b"\x00")   # 0x00 登录成功
+        with self.qr_lock:
+            self._cancel_qr_timer()
+            self.qr_attempts = 0
+            self.qr_confirmed = False
+        self.send_qr_prefix()
+
+    # ----- 二维码前缀下发：0xF0 -> 0xF1 -----
+    def _cancel_qr_timer(self):
+        if self.qr_timer is not None:
+            self.qr_timer.cancel()
+            self.qr_timer = None
+
+    def send_qr_prefix(self):
+        # 每个注册会话最多尝试三次；二维码数据在设备断电后丢失。
+        with self.qr_lock:
+            if self.qr_confirmed or self.qr_attempts >= QR_MAX_ATTEMPTS:
+                return
+            if not self.pile_no_bcd or SessionRegistry.get(self.pile_no) is not self:
+                return
+            prefix = QR_PREFIX.encode("ascii")
+            if len(prefix) > 200:
+                raise ValueError("二维码前缀不能超过200字节")
+            body = self.pile_no_bcd + bytes([QR_FORMAT, len(prefix)]) + prefix
+            self._cancel_qr_timer()
+            self.qr_attempts += 1
+            attempt = self.qr_attempts
+            try:
+                self.send_frame(0xF0, body)
+            except OSError as exc:
+                log.warning("[QR] 桩[%s] 下发失败: %s", self.pile_no, exc)
+                return
+            log.info("[QR] 桩[%s] 已下发二维码前缀(0xF0) 第%d/%d次",
+                     self.pile_no, attempt, QR_MAX_ATTEMPTS)
+            timer = threading.Timer(QR_ACK_TIMEOUT, self._qr_timeout, args=(attempt,))
+            timer.daemon = True
+            self.qr_timer = timer
+            timer.start()
+
+    def _qr_timeout(self, attempt):
+        with self.qr_lock:
+            if self.qr_confirmed or self.qr_attempts != attempt:
+                return
+            log.warning("[QR] 桩[%s] 第%d次下发等待0xF1超时", self.pile_no, attempt)
+            self.send_qr_prefix()
+
+    def h_F1(self, seq, body):
+        if len(body) != 8:
+            log.warning("[QR] 0xF1长度异常: %d", len(body))
+            return
+        pile_no = bcd_to_str(body[:7])
+        if pile_no != self.pile_no:
+            log.warning("[QR] 忽略桩号不匹配的0xF1: %s != %s", pile_no, self.pile_no)
+            return
+        with self.qr_lock:
+            if self.qr_attempts == 0:
+                log.warning("[QR] 忽略未下发二维码时收到的0xF1: %s", pile_no)
+                return
+            self._cancel_qr_timer()
+            if body[7] == 0:
+                self.qr_confirmed = True
+                log.info("[QR] 桩[%s] 0xF1确认二维码下发成功", pile_no)
+            else:
+                log.warning("[QR] 桩[%s] 0xF1确认二维码下发失败(结果=%d)", pile_no, body[7])
+                self.send_qr_prefix()
 
     # ----- 0x03 心跳包 -> 0x04 -----
     def h_03(self, seq, body):
@@ -1695,6 +1777,8 @@ class YkcHandler(BaseRequestHandler):
         except (ConnectionResetError, BrokenPipeError, OSError) as e:
             log.info("连接中断 %s: %s", self.client_address, e)
         finally:
+            with session.qr_lock:
+                session._cancel_qr_timer()
             if session.pile_no:
                 if not session.watchdog_fired:
                     try:
