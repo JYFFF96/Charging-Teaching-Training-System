@@ -659,7 +659,7 @@ class PileSession:
         with self.qr_lock:
             if self.qr_confirmed or self.qr_attempts >= QR_MAX_ATTEMPTS:
                 return
-            if not self.pile_no_bcd or SessionRegistry.get(self.pile_no) is not self:
+            if not self.pile_no_bcd or STORE.get_session(self.pile_no) is not self:
                 return
             prefix = QR_PREFIX.encode("ascii")
             if len(prefix) > 200:
